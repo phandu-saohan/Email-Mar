@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { getApiUrl } from "../utils";
 import { 
   Database, 
   CheckCircle2, 
@@ -65,7 +66,7 @@ export function SupabaseConsole() {
 
   const fetchStatus = async () => {
     try {
-      const response = await fetch("/api/supabase/status");
+      const response = await fetch(getApiUrl("/api/supabase/status"));
       const data = await response.json();
       setStatus(data);
     } catch (e) {
@@ -78,7 +79,7 @@ export function SupabaseConsole() {
   const triggerRefresh = async () => {
     setRefreshing(true);
     try {
-      const response = await fetch("/api/supabase/refresh", { method: "POST" });
+      const response = await fetch(getApiUrl("/api/supabase/refresh"), { method: "POST" });
       const data = await response.json();
       if (status) {
         setStatus({
@@ -163,7 +164,7 @@ export function SupabaseConsole() {
     setUploadSuccess(null);
 
     try {
-      const response = await fetch("/api/supabase/upload-image", {
+      const response = await fetch(getApiUrl("/api/supabase/upload-image"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

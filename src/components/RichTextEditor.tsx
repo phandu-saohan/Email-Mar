@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { getApiUrl } from "../utils";
 import {
   Bold,
   Italic,
@@ -180,7 +181,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
       }
       setIsUploadingToSupabase(true);
       try {
-        const response = await fetch("/api/supabase/upload-image", {
+        const response = await fetch(getApiUrl("/api/supabase/upload-image"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -240,7 +241,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
   const handleAutoInsertImages = async () => {
     setIsInsertingAutoImages(true);
     try {
-      const response = await fetch("/api/gemini/auto-insert-images", {
+      const response = await fetch(getApiUrl("/api/gemini/auto-insert-images"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -274,7 +275,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
 
     setIsDrawingImage(true);
     try {
-      const response = await fetch("/api/gemini/generate-image-inline", {
+      const response = await fetch(getApiUrl("/api/gemini/generate-image-inline"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

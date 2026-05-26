@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { SmtpConfig } from "../types";
-import { Server, ShieldCheck, Mail, User, Key, Eye, EyeOff, CheckCircle2, AlertCircle, RefreshCw, Clock, Sparkles } from "lucide-react";
+import { Server, ShieldCheck, Mail, User, Key, Eye, EyeOff, CheckCircle2, AlertCircle, RefreshCw, Clock, Sparkles, Link2 } from "lucide-react";
+import { getApiUrl } from "../utils";
 
 interface SmtpSettingsProps {
   smtpConfig: SmtpConfig | null;
@@ -18,6 +19,15 @@ export function SmtpSettings({ smtpConfig, onSave }: SmtpSettingsProps) {
   const [delaySeconds, setDelaySeconds] = useState(smtpConfig?.delaySeconds || 15);
   const [showPassword, setShowPassword] = useState(false);
 
+  // API Backend URL state for deployments like Vercel
+  const [apiBackendUrl, setApiBackendUrl] = useState(() => {
+    try {
+      return localStorage.getItem("api_backend_url") || "";
+    } catch {
+      return "";
+    }
+  });
+
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
@@ -33,6 +43,22 @@ export function SmtpSettings({ smtpConfig, onSave }: SmtpSettingsProps) {
       fromEmail: fromEmail || user,
       delaySeconds: Number(delaySeconds)
     });
+  };
+
+  const handleSaveApiBackend = () => {
+    try {
+      const url = apiBackendUrl.trim();
+      if (url) {
+        localStorage.setItem("api_backend_url", url);
+        alert(`✓ Đã lưu cấu hình API Backend URL: ${url}\n\nHệ thống sẽ định tuyến toàn bộ yêu cầu qua cổng API này.`);
+      } else {
+        localStorage.removeItem("api_backend_url");
+        alert("✓ Đã xóa cấu hình API Backend. Hệ thống sẽ sử dụng Relative Route mặc định.");
+      }
+      window.location.reload(); // Reload to apply across entire React app context
+    } catch (e) {
+      alert("Không thể lưu API Backend URL: " + e);
+    }
   };
 
   const testConnection = async () => {
@@ -59,7 +85,7 @@ export function SmtpSettings({ smtpConfig, onSave }: SmtpSettingsProps) {
     };
 
     try {
-      const response = await fetch("/api/campaigns/test-smtp", {
+      const response = await fetch(getApiUrl("/api/campaigns/test-smtp"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -395,6 +421,63 @@ export function SmtpSettings({ smtpConfig, onSave }: SmtpSettingsProps) {
           </div>
         </div>
 
+      </div>
+
+      {/* API Backend URL integration for Vercel / External Deployments */}
+      <div className="mt-8 pt-8 border-t border-slate-100 bg-slate-50/50 p-6 rounded-2xl border border-slate-100 space-y-4">
+        <div className="flex items-center gap-2">
+          <div className="p-2 bg-indigo-100 text-indigo-700 rounded-xl">
+            <Link2 className="h-5 w-5" />
+          </div>
+          <div>
+            <h3 className="text-sm font-extrabold text-slate-800">Cấu hình Đích kết nối API Backend (Dành cho Vercel / Máy chủ ngoài)</h3>
+            <p className="text-[11px] text-slate-400">Nếu bạn chạy giao diện này trên Vercel, hãy cấu hình đường dẫn này để kết nối về máy chủ API Cloud Run chính thức.</p>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <p className="text-xs text-slate-600 leading-normal">
+            Giao diện chạy trên <strong>Vercel (email-mar.vercel.app)</strong> chỉ là trang tĩnh (SPA). Các chức năng như <strong>gửi SMTP thật, sử dụng AI Gemini</strong> yêu cầu máy chủ Node.js hoạt động. Hãy điền liên kết máy chủ Cloud Run của bạn vào đây:
+          </p>
+
+          <div className="flex flex-col sm:flex-row gap-3">
+            <input
+              type="url"
+              placeholder="https://ais-pre-kfmstvnejouesdbyvqhy37-329591203279.asia-southeast1.run.app"
+              value={apiBackendUrl}
+              onChange={(e) => setApiBackendUrl(e.target.value)}
+              className="flex-1 px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:border-indigo-500 bg-white text-slate-800 shadow-sm"
+            />
+            <div className="flex gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleSaveApiBackend}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 text-xs rounded-lg transition shadow-sm shrink-0"
+              >
+                💾 Lưu Cổng API Backend
+              </button>
+              {apiBackendUrl && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setApiBackendUrl("");
+                    localStorage.removeItem("api_backend_url");
+                    alert("✓ Đã xóa cấu hình API Backend. Hệ thống sẽ sử dụng relative routes mặc định.");
+                    window.location.reload();
+                  }}
+                  className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold px-3 py-2 text-xs rounded-lg transition shrink-0"
+                >
+                  Xoá rỗng
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="p-3 bg-indigo-50/50 border border-indigo-100 rounded-xl text-[10px] text-indigo-850 leading-relaxed font-semibold">
+            💡 <strong>Gợi ý:</strong> Bạn có thể sử dụng URL Cloud Run chính thức của dự án này làm Backend API Endpoint:<br />
+            <code className="text-indigo-900 bg-indigo-100/60 px-1 py-0.5 rounded select-all block mt-1 break-all">https://ais-pre-kfmstvnejouesdbyvqhy37-329591203279.asia-southeast1.run.app</code>
+          </div>
+        </div>
       </div>
 
     </div>

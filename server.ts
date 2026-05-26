@@ -1012,10 +1012,15 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
   // API - Start sending campaign
   app.post("/api/campaigns/:id/start", async (req, res) => {
     const { id } = req.params;
+    const { smtpConfig } = req.body || {};
     const campaign = campaigns[id];
 
     if (!campaign) {
       return res.status(404).json({ error: "Không tìm thấy chiến dịch này." });
+    }
+
+    if (smtpConfig) {
+      campaign.smtpConfig = smtpConfig;
     }
 
     if (campaign.status === "sending") {
@@ -1024,7 +1029,7 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
 
     const success = await startCampaignSending(id);
     if (!success) {
-      return res.status(550).json({ error: "Thất bại kích hoạt tiến trình gửi thư." });
+      return res.status(550).json({ error: "Thất bại kích hoạt tiến trình gửi thư hoặc chưa cấu hình SMTP." });
     }
     res.json({ success: true, message: "Bắt đầu tiến trình gửi chiến dịch.", campaign });
   });
@@ -1136,6 +1141,38 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
     delete campaigns[id];
     deleteCampaignFromSupabase(id);
     res.json({ success: true });
+  });
+
+  // API - Update a campaign
+  app.post("/api/campaigns/:id/update", (req, res) => {
+    const { id } = req.params;
+    const campaign = campaigns[id];
+    if (!campaign) {
+      return res.status(404).json({ error: "Không tìm thấy chiến dịch để chỉnh sửa." });
+    }
+
+    const { name, subject, body, contacts } = req.body;
+    if (name !== undefined) campaign.name = name;
+    if (subject !== undefined) campaign.subject = subject;
+    if (body !== undefined) campaign.body = body;
+    if (contacts !== undefined && Array.isArray(contacts)) {
+      campaign.contacts = contacts;
+      // Adjust safe indexes if recipient list size shrunk
+      if (campaign.currentIndex > contacts.length) {
+        campaign.currentIndex = contacts.length;
+      }
+    }
+
+    campaign.logs.unshift({
+      timestamp: new Date().toISOString(),
+      email: "SYSTEM",
+      name: "Hệ thống",
+      status: "pending",
+      message: "Chiến dịch đã được cập nhật nội dung thành công.",
+    });
+
+    syncCampaignToSupabase(campaign);
+    res.json({ success: true, campaign });
   });
 
   // Serve static files in production / Vite configuration in development
