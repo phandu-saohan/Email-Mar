@@ -697,7 +697,7 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
 
       await transporter.sendMail({
         from: `"${smtpConfig.fromName || "Trình gửi Test"}" <${smtpConfig.fromEmail || smtpConfig.user}>`,
-        to: testEmail,
+        to: `"${mockContact.name || "Khách Hàng Thử Nghiệm"}" <${testEmail}>`,
         subject: compiledSubject,
         html: compiledBody,
       });
@@ -835,8 +835,8 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
 
         try {
           await transporter.sendMail({
-            from: `"${smtpConfig.fromName}" <${smtpConfig.fromEmail}>`,
-            to: contact.email,
+            from: `"${smtpConfig.fromName || "Phòng Marketing"}" <${smtpConfig.fromEmail || smtpConfig.user}>`,
+            to: `"${contact.name || "Khách hàng"}" <${contact.email}>`,
             subject: personalizedSubject,
             html: personalizedBody,
           });

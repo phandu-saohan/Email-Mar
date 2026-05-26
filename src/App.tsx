@@ -613,6 +613,47 @@ export default function App() {
     }
   };
 
+  const handleCreateNewCampaignClick = () => {
+    setCampaignName(`Chiến dịch mới #${Date.now().toString().slice(-4)}`);
+    setSubject("🚀 {{name}} ơi! Đừng bỏ lỡ ưu đãi đặc biệt mới nhất từ chúng tôi!");
+    setBody(`<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: 'Helvetica Neue', Arial, sans-serif; background-color: #f4f6f8; margin: 0; padding: 40px; }
+    .card { background-color: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; padding: 40px; max-width: 600px; margin: 0 auto; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+    .header { font-size: 24px; font-weight: bold; color: #1e1b4b; text-align: center; margin-bottom: 24px; letter-spacing: -0.025em; }
+    .body-text { font-size: 15px; color: #334155; line-height: 1.6; margin-bottom: 24px; }
+    .cta-btn { display: block; text-align: center; background-color: #4f46e5; color: #ffffff !important; text-decoration: none; padding: 14px 28px; border-radius: 8px; font-weight: bold; margin: 30px auto; max-width: 250px; box-shadow: 0 10px 15px -3px rgba(79, 70, 229, 0.3); }
+    .footer { font-size: 12px; color: #94a3b8; text-align: center; border-top: 1px solid #f1f5f9; padding-top: 20px; margin-top: 30px; }
+    .badge { background-color: #e0e7ff; color: #4338ca; border-radius: 9999px; padding: 4px 12px; font-size: 12px; font-weight: 500; display: inline-block; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div style="text-align: center; margin-bottom: 12px;"><span class="badge">ƯU ĐÃI THÀNH VIÊN</span></div>
+    <div class="header">Gửi riêng người bạn {{name}} đồng hành</div>
+    <p class="body-text">Xin chào <strong>{{name}}</strong>,</p>
+    <p class="body-text">Chúng tôi vô cùng vinh hạnh khi bạn đang giữ vai trò là <strong>{{position}}</strong> tại <strong>{{company}}</strong>. Để đồng hành cùng những nỗ lực tuyệt vời đó, chúng tôi gửi tặng riêng bạn cơ hội giảm giá <strong>{{discount}}</strong>.</p>
+    
+    <a href="https://example.com/promo-link?ref={{email}}" class="cta-btn">Nhận Ưu Đãi Của Bạn</a>
+    
+    <p class="body-text">Chương trình chỉ áp dụng cho người nhận trực tiếp thư này. Hạn kết thúc trước ngày cuối tháng này.</p>
+    <div class="footer">
+      Bạn nhận được thư này dựa trên đăng ký tại {{company}}.<br>
+      © 2026 MailFlow Pro | <a href="#" style="color:#64748b; text-decoration:underline;">Hủy đăng ký</a>
+    </div>
+  </div>
+</body>
+</html>`);
+    setAiTopic("");
+    setAiInstructions("");
+    setAiAlertMessage(null);
+    setIsScheduled(false);
+    setParseError(null);
+    setActiveTab("newCampaign");
+  };
+
   // Compile individual templates for visual previews with interactive variables
   const compileText = (text: string, contact: Contact | undefined): string => {
     if (!contact) return text;
@@ -731,21 +772,30 @@ export default function App() {
         {/* RIGHT SIDEBAR / SYSTEM CONTROL: Campaign Navigation (Grid span 4) */}
         <section className="lg:col-span-4 space-y-6">
           
-          {/* Campaign List block */}
+           {/* Campaign List block */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100 gap-1">
               <div>
-                <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Danh sách chiến dịch đã tạo</h3>
-                <p className="text-xs text-slate-400 mt-0.5">Chọn một dòng để theo dõi thời gian thực</p>
+                <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Danh sách chiến dịch</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Chọn dòng để xem chi tiết</p>
               </div>
-              <button
-                onClick={fetchCampaigns}
-                disabled={isRefreshing}
-                className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-slate-50 rounded-lg transition"
-                title="Làm mới danh sách"
-              >
-                <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={handleCreateNewCampaignClick}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold rounded-xl transition shadow-sm"
+                  title="Tạo chiến dịch mới"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Thêm Mới
+                </button>
+                <button
+                  onClick={fetchCampaigns}
+                  disabled={isRefreshing}
+                  className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-slate-50 rounded-xl transition border border-slate-100"
+                  title="Làm mới danh sách"
+                >
+                  <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+                </button>
+              </div>
             </div>
 
             <div className="space-y-3 mt-4 max-h-[350px] overflow-y-auto pr-1">
