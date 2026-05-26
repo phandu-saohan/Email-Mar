@@ -50,7 +50,15 @@ const DEMO_CONTACTS: Contact[] = [
 export default function App() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [selectedCampaign, setSelectedCampaign] = useState<Campaign | null>(null);
-  const [smtpConfig, setSmtpConfig] = useState<SmtpConfig | null>(null);
+  const [smtpConfig, setSmtpConfig] = useState<SmtpConfig | null>(() => {
+    try {
+      const saved = localStorage.getItem("smtp_config");
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      console.error("Lỗi đọc cấu hình SMTP khởi tạo:", e);
+      return null;
+    }
+  });
 
   // Form states for creating new campaign
   const [campaignName, setCampaignName] = useState("Chiến dịch Ưu Đãi Mùa Hè 2026");
@@ -608,8 +616,16 @@ export default function App() {
 
   const handleUpdateSmtpConfig = (newConfig: SmtpConfig | null) => {
     setSmtpConfig(newConfig);
-    if (newConfig) {
-      alert(`Đã lưu cấu hình máy chủ SMTP thành công! Khoảng giãn cách gửi được thiết lập ở mức: ${newConfig.delaySeconds || 15} giây giữa các email.`);
+    try {
+      if (newConfig) {
+        localStorage.setItem("smtp_config", JSON.stringify(newConfig));
+        alert(`Đã lưu cấu hình máy chủ SMTP thành công vào trình duyệt! Khoảng giãn cách gửi được thiết lập ở mức: ${newConfig.delaySeconds || 15} giây giữa các email.`);
+      } else {
+        localStorage.removeItem("smtp_config");
+        alert("Đã xoá cấu hình SMTP.");
+      }
+    } catch (e) {
+      console.error("Lỗi khi lưu cấu hình SMTP vào localStorage:", e);
     }
   };
 
