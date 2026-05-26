@@ -20,7 +20,11 @@ import {
   FileText,
   ChevronDown,
   Sparkles,
-  Image
+  Image,
+  Upload,
+  X,
+  FileImage,
+  RefreshCw
 } from "lucide-react";
 
 interface RichTextEditorProps {
@@ -45,6 +49,193 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
   const [showDrawModal, setShowDrawModal] = useState(false);
   const [customImagePrompt, setCustomImagePrompt] = useState("");
   const [customImageAspect, setCustomImageAspect] = useState<"16:9" | "1:1">("16:9");
+
+  // States for custom manual image insertion (URL / Base64 / Supabase upload)
+  const [showImageModal, setShowImageModal] = useState(false);
+  const [imageTab, setImageTab] = useState<"url" | "upload" | "supabase">("supabase");
+  const [manualImageUrl, setManualImageUrl] = useState("");
+  const [manualImageAlt, setManualImageAlt] = useState("");
+  const [uploadedImageBase64, setUploadedImageBase64] = useState<string | null>(null);
+  const imageFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Supabase live upload sub-states inside the editor
+  const [supabaseUploadBase64, setSupabaseUploadBase64] = useState<string | null>(null);
+  const [supabaseUploadName, setSupabaseUploadName] = useState("");
+  const [supabaseUploadType, setSupabaseUploadType] = useState("");
+  const [isUploadingToSupabase, setIsUploadingToSupabase] = useState(false);
+  const supabaseFileInputRef = useRef<HTMLInputElement>(null);
+
+  const insertHtmlAtCursor = (htmlBlock: string) => {
+    if (activeTab === "visual" && editorRef.current) {
+      editorRef.current.focus();
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        range.deleteContents();
+        
+        const div = document.createElement("div");
+        div.innerHTML = htmlBlock;
+        const frag = document.createDocumentFragment();
+        while (div.firstChild) {
+          frag.appendChild(div.firstChild);
+        }
+        range.insertNode(frag);
+        
+        // Move caret after selection
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } else {
+        editorRef.current.innerHTML += htmlBlock;
+      }
+      handleInput();
+    } else {
+      const textarea = document.getElementById("html-raw-editor") as HTMLTextAreaElement;
+      if (textarea) {
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const newText = value.substring(0, start) + htmlBlock + value.substring(end);
+        onChange(newText);
+        setTimeout(() => {
+          textarea.focus();
+          textarea.selectionStart = textarea.selectionEnd = start + htmlBlock.length;
+        }, 10);
+      } else {
+        onChange(value + "\n" + htmlBlock);
+      }
+    }
+  };
+
+  const handleImageUploadChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    if (!file.type.startsWith("image/")) {
+      alert("Vui lòng chọn một tệp tin hình ảnh phù hợp (png, jpg, jpeg, gif, webp).");
+      return;
+    }
+    
+    // Check file size (recommend limit under 3MB to avoid exceeding payload sizes)
+    if (file.size > 3 * 1024 * 1024) {
+      if (!confirm("Hình ảnh này có dung lượng hớn 3MB. Gửi ảnh dạng nhúng Base64 dung lượng lớn có thể tăng kích thước email và làm chậm tiến trình gửi. Bạn có chắc chắn muốn tiếp tục?")) {
+        return;
+      }
+    }
+    
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64Url = event.target?.result as string;
+      if (base64Url) {
+        setUploadedImageBase64(base64Url);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSupabaseFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      alert("Vui lòng chọn một tệp tin hình ảnh phù hợp (png, jpg, jpeg, gif, webp).");
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      alert("Kích thước hình ảnh lớn hơn 5MB. Vui lòng chọn ảnh nhỏ hơn để đảm bảo tốc độ truyền tải.");
+      return;
+    }
+
+    setSupabaseUploadName(file.name);
+    setSupabaseUploadType(file.type);
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64Url = event.target?.result as string;
+      if (base64Url) {
+        setSupabaseUploadBase64(base64Url);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleInsertManualImage = async () => {
+    let finalUrl = "";
+    if (imageTab === "url") {
+      if (!manualImageUrl.trim()) {
+        alert("Vui lòng nhập đường dẫn hình ảnh.");
+        return;
+      }
+      finalUrl = manualImageUrl.trim();
+    } else if (imageTab === "upload") {
+      if (!uploadedImageBase64) {
+        alert("Vui lòng chọn hoặc kéo thả tệp ảnh trước.");
+        return;
+      }
+      finalUrl = uploadedImageBase64;
+    } else if (imageTab === "supabase") {
+      if (!supabaseUploadBase64) {
+        alert("Vui lòng chọn tệp ảnh từ máy tính để tải lên Supabase Storage.");
+        return;
+      }
+      setIsUploadingToSupabase(true);
+      try {
+        const response = await fetch("/api/supabase/upload-image", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileBase64: supabaseUploadBase64,
+            fileName: `editor_${Date.now()}_${supabaseUploadName.replace(/[^a-zA-Z0-9.-]/g, "_")}`,
+            contentType: supabaseUploadType
+          })
+        });
+
+        const data = await response.json();
+        if (response.ok && data.success) {
+          finalUrl = data.imageUrl;
+          
+          // Sync with general Storage library in localStorage
+          try {
+            const saved = localStorage.getItem("supabase_uploaded_images");
+            const history = saved ? JSON.parse(saved) : [];
+            const newItem = {
+              url: data.imageUrl,
+              name: supabaseUploadName,
+              date: new Date().toISOString(),
+              size: `${(supabaseUploadBase64.length * 0.75 / (1024 * 1024)).toFixed(2)} MB`
+            };
+            localStorage.setItem("supabase_uploaded_images", JSON.stringify([newItem, ...history]));
+          } catch (storageErr) {
+            console.warn("Storage syncing warning:", storageErr);
+          }
+          
+          alert("✓ Tải ảnh lên Supabase Storage thành công!");
+        } else {
+          alert(`Lỗi: ${data.error || "Không thể tải lên Supabase Storage. Hãy chắc chắn bạn đã cấu hình Credentials và tạo bucket 'images' công khai (public)."}`);
+          return;
+        }
+      } catch (err: any) {
+        alert(`Lỗi máy chủ kết nối: ${err.message}`);
+        return;
+      } finally {
+        setIsUploadingToSupabase(false);
+      }
+    }
+
+    const altText = manualImageAlt.trim() || "Hình ảnh chiến dịch";
+    const imgBlock = `<div style="text-align: center; margin: 20px 0;"><img src="${finalUrl}" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);" alt="${altText.replace(/"/g, '&quot;')}" /></div>`;
+    
+    insertHtmlAtCursor(imgBlock);
+    
+    // reset configurations
+    setManualImageUrl("");
+    setManualImageAlt("");
+    setUploadedImageBase64(null);
+    setSupabaseUploadBase64(null);
+    setSupabaseUploadName("");
+    setSupabaseUploadType("");
+    setShowImageModal(false);
+  };
 
   const handleAutoInsertImages = async () => {
     setIsInsertingAutoImages(true);
@@ -96,27 +287,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
       if (response.ok && data.success) {
         const imgBlock = `<div style="text-align: center; margin: 24px 0;"><img src="${data.imageUrl}" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);" referrerPolicy="no-referrer" alt="${customImagePrompt.replace(/"/g, '&quot;')}" /></div>`;
         
-        if (activeTab === "visual" && editorRef.current) {
-          editorRef.current.focus();
-          const sel = window.getSelection();
-          if (sel && sel.rangeCount > 0) {
-            const range = sel.getRangeAt(0);
-            range.deleteContents();
-            
-            const div = document.createElement("div");
-            div.innerHTML = imgBlock;
-            const frag = document.createDocumentFragment();
-            while (div.firstChild) {
-              frag.appendChild(div.firstChild);
-            }
-            range.insertNode(frag);
-          } else {
-            editorRef.current.innerHTML += imgBlock;
-          }
-          handleInput();
-        } else {
-          onChange(value + "\n" + imgBlock);
-        }
+        insertHtmlAtCursor(imgBlock);
         setShowDrawModal(false);
         setCustomImagePrompt("");
         alert("✓ Đã vẽ và chèn hình ảnh AI Imagen thành công!");
@@ -326,6 +497,20 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
           >
             <span>{isInsertingAutoImages ? "⏳ Đang quét & chèn..." : "🎨 Tự động chèn ảnh AI"}</span>
             <Sparkles className="h-3 w-3 text-emerald-650" />
+          </button>
+
+          {/* Manual Insert Image Button */}
+          <button
+            type="button"
+            onClick={() => {
+              setImageTab("upload");
+              setShowImageModal(true);
+            }}
+            className="w-full sm:w-auto px-3 py-1.5 bg-sky-50 hover:bg-sky-100 border border-sky-200 text-sky-700 text-xs font-bold rounded-lg transition flex items-center justify-center gap-1.5 shadow-sm"
+            title="Thêm hình ảnh từ máy tính (Base64) hoặc dán link ảnh URL vào lá thư"
+          >
+            <span>🖼️ Chèn Hình Ảnh</span>
+            <Image className="h-3 w-3 text-sky-650" />
           </button>
 
           {/* Manual Drawing Button */}
@@ -539,6 +724,17 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
             </button>
             <button
               type="button"
+              onClick={() => {
+                setImageTab("upload");
+                setShowImageModal(true);
+              }}
+              title="Chèn ảnh (URL hoặc máy tính)"
+              className="p-1.5 hover:bg-slate-100 text-slate-705 rounded transition font-bold"
+            >
+              <Image className="h-4 w-4 text-emerald-600" />
+            </button>
+            <button
+              type="button"
               onClick={() => execCommand("insertHorizontalRule")}
               title="Chèn đường gạch ngang"
               className="p-1.5 hover:bg-slate-100 text-slate-700 rounded transition"
@@ -675,6 +871,236 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
                 className="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-bold px-4 py-2 text-xs rounded-xl transition disabled:opacity-50"
               >
                 {isDrawingImage ? "⏳ Đang vẽ..." : "🎨 Vẽ & Chèn Ngay"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Manual Insert Image Custom Modal Overlay */}
+      {showImageModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[100] p-4">
+          <div className="bg-white rounded-3xl p-6 max-w-lg w-full border border-slate-100 shadow-2xl space-y-4 font-sans">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-sky-100 text-sky-700 rounded-xl">
+                  <Image className="h-5 w-5 animate-pulse" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-slate-800">Chèn hình ảnh thư điện tử</h3>
+                  <p className="text-[11px] text-slate-400">Tải ảnh lên lưu trữ đám mây hoặc nhúng tĩnh Base64</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowImageModal(false);
+                  setManualImageUrl("");
+                  setManualImageAlt("");
+                  setUploadedImageBase64(null);
+                  setSupabaseUploadBase64(null);
+                  setSupabaseUploadName("");
+                  setSupabaseUploadType("");
+                }}
+                className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Selection tab */}
+            <div className="flex bg-slate-100 p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setImageTab("supabase")}
+                className={`flex-1 text-center py-1.5 text-[10px] font-bold rounded-lg transition-all ${
+                  imageTab === "supabase"
+                    ? "bg-white text-sky-650 shadow-sm"
+                    : "text-slate-500 hover:text-slate-850"
+                }`}
+              >
+                ☁️ Supabase Cloud
+              </button>
+              <button
+                type="button"
+                onClick={() => setImageTab("upload")}
+                className={`flex-1 text-center py-1.5 text-[10px] font-bold rounded-lg transition-all ${
+                  imageTab === "upload"
+                    ? "bg-white text-sky-650 shadow-sm"
+                    : "text-slate-500 hover:text-slate-850"
+                }`}
+              >
+                📁 Nhúng Base64
+              </button>
+              <button
+                type="button"
+                onClick={() => setImageTab("url")}
+                className={`flex-1 text-center py-1.5 text-[10px] font-bold rounded-lg transition-all ${
+                  imageTab === "url"
+                    ? "bg-white text-sky-650 shadow-sm"
+                    : "text-slate-500 hover:text-slate-850"
+                }`}
+              >
+                🔗 Nhập URL
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {imageTab === "supabase" ? (
+                <div className="space-y-3">
+                  <div
+                    onClick={() => supabaseFileInputRef.current?.click()}
+                    className="border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-indigo-50/10 hover:bg-slate-50 p-6 rounded-2xl cursor-pointer text-center transition flex flex-col items-center justify-center space-y-2"
+                  >
+                    <input
+                      type="file"
+                      ref={supabaseFileInputRef}
+                      onChange={handleSupabaseFileSelect}
+                      accept="image/*"
+                      className="hidden"
+                    />
+                    <Upload className="h-8 w-8 text-indigo-505" />
+                    <div>
+                      <p className="text-xs font-bold text-slate-700">Tải ảnh lên lưu trữ đám mây Supabase</p>
+                      <span className="text-[10px] text-slate-400 block mt-0.5">Hỗ trợ PNG, JPG, JPEG, GIF, WEBP dưới 5MB</span>
+                    </div>
+                  </div>
+
+                  {supabaseUploadBase64 ? (
+                    <div className="p-3 bg-indigo-50/60 border border-indigo-100 rounded-xl flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-lg border border-slate-200 overflow-hidden shrink-0 bg-white flex items-center justify-center">
+                        <img src={supabaseUploadBase64} className="object-cover w-full h-full" alt="Supabase Preview" />
+                      </div>
+                      <div className="flex-1 min-w-0 font-medium">
+                        <div className="text-indigo-800 font-bold text-xs truncate">{supabaseUploadName}</div>
+                        <div className="text-[10px] text-slate-400">Nhấp "Chèn Hình Ảnh Ngay" để tiến hành upload lên đám mây.</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSupabaseUploadBase64(null);
+                          setSupabaseUploadName("");
+                          setSupabaseUploadType("");
+                        }}
+                        className="text-[10px] text-rose-600 hover:underline font-bold shrink-0"
+                      >
+                        Xóa
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="p-2.5 bg-indigo-50/40 border border-indigo-100 rounded-xl text-[10px] text-indigo-850 leading-normal font-medium">
+                      💡 <strong>Ưu điểm:</strong> Ảnh được lưu trữ trực tuyến vĩnh viễn trên Supabase Storage. Thư điện tử nhẹ, chuẩn tiếp thị cao cấp.
+                    </div>
+                  )}
+                </div>
+              ) : imageTab === "upload" ? (
+                <div className="space-y-3">
+                  <div
+                    onClick={() => imageFileInputRef.current?.click()}
+                    className="border-2 border-dashed border-sky-200 hover:border-sky-450 bg-sky-50/15 hover:bg-slate-50 p-6 rounded-2xl cursor-pointer text-center transition flex flex-col items-center justify-center space-y-2"
+                  >
+                    <input
+                      type="file"
+                      ref={imageFileInputRef}
+                      onChange={handleImageUploadChange}
+                      accept="image/*"
+                      className="hidden"
+                    />
+                    <Upload className="h-8 w-8 text-sky-500" />
+                    <div>
+                      <p className="text-xs font-bold text-slate-705">Chọn ảnh nhúng thẳng vào nội dung mã thư</p>
+                      <span className="text-[10px] text-slate-400 block mt-0.5">Khuyên dùng dưới 2MB</span>
+                    </div>
+                  </div>
+
+                  {uploadedImageBase64 ? (
+                    <div className="p-3 bg-emerald-50 border border-emerald-100 rounded-xl flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-lg border border-slate-200 overflow-hidden shrink-0 bg-white flex items-center justify-center">
+                        <img src={uploadedImageBase64} className="object-cover w-full h-full" alt="Preview Base64" />
+                      </div>
+                      <div className="flex-1 min-w-0 font-medium">
+                        <div className="text-emerald-800 font-bold text-xs">Đã nạp ảnh thành công!</div>
+                        <div className="text-[10px] text-slate-400 truncate">Sắp chuẩn bị nhúng dạng tĩnh Base64</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setUploadedImageBase64(null)}
+                        className="text-[10px] text-rose-600 hover:underline font-bold"
+                      >
+                        Xóa
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="p-2.5 bg-amber-50/50 border border-amber-100 rounded-xl text-[10px] text-amber-800 leading-normal">
+                      💡 <strong>Đặc điểm:</strong> Phương án này nhúng trực tiếp hình ảnh thô dạng Base64 vào mã email, giúp đọc được luôn không lo lỗi link ngoài.
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <label className="block text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Đường dẫn hình ảnh (Image URL):</label>
+                  <input
+                    type="url"
+                    required={imageTab === "url"}
+                    value={manualImageUrl}
+                    onChange={(e) => setManualImageUrl(e.target.value)}
+                    placeholder="https://example.com/assets/banner.png"
+                    className="block w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:border-sky-500 bg-white text-slate-800"
+                  />
+                  {manualImageUrl.trim() && (
+                    <div className="mt-2 p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-center">
+                      <img src={manualImageUrl} className="max-h-24 object-contain rounded-lg border border-slate-200/50" onError={(e) => {
+                        (e.target as HTMLImageElement).src = "https://placehold.co/400x150?text=Đường+dẫn+chưa+hợp+lệ+hoặc+chặn+CORS";
+                      }} alt="URL preview" />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label className="block text-[10px] font-extrabold uppercase tracking-wider text-slate-400 font-bold">Mô tả ảnh hiển thị (Alt Text) - Tùy chọn:</label>
+                <input
+                  type="text"
+                  value={manualImageAlt}
+                  onChange={(e) => setManualImageAlt(e.target.value)}
+                  placeholder="Ví dụ: Banner siêu ưu đãi rực rỡ"
+                  className="block w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-sky-500 bg-white text-slate-800 font-semibold"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowImageModal(false);
+                  setManualImageUrl("");
+                  setManualImageAlt("");
+                  setUploadedImageBase64(null);
+                  setSupabaseUploadBase64(null);
+                  setSupabaseUploadName("");
+                  setSupabaseUploadType("");
+                }}
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-4 py-2.5 text-xs rounded-xl transition"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                disabled={isUploadingToSupabase}
+                onClick={handleInsertManualImage}
+                className="flex-1 bg-sky-600 hover:bg-sky-700 text-white font-bold px-4 py-2.5 text-xs rounded-xl transition disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {isUploadingToSupabase ? (
+                  <>
+                    <RefreshCw className="h-3 w-3 animate-spin" />
+                    <span>Đang tải tệp...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>⚡ Chèn Hình Ảnh Ngay</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

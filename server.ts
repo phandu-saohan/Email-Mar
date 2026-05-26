@@ -340,6 +340,100 @@ ALTER TABLE campaigns DISABLE ROW LEVEL SECURITY;
     });
   });
 
+  // API - Upload image to Supabase Storage images bucket
+  app.post("/api/supabase/upload-image", async (req, res) => {
+    try {
+      if (!supabase) {
+        return res.status(400).json({ 
+          error: "Supabase chưa được cấu hình. Vui lòng thêm SUPABASE_URL & SUPABASE_KEY vào mục Settings > Secrets." 
+        });
+      }
+
+      const { fileBase64, fileName, contentType } = req.body;
+      if (!fileBase64) {
+        return res.status(400).json({ error: "Thiếu dữ liệu file hình ảnh (Base64)." });
+      }
+
+      // Parse base64
+      let cleanBase64 = fileBase64;
+      if (fileBase64.includes(";base64,")) {
+        cleanBase64 = fileBase64.split(";base64,").pop();
+      }
+      const buffer = Buffer.from(cleanBase64, "base64");
+
+      // Generate a unique filename if none provided
+      const finalFileName = fileName || `img_${Date.now()}_${Math.random().toString(36).substr(2, 5)}.png`;
+      const finalContentType = contentType || "image/png";
+
+      // Try to upload to "images" bucket
+      const bucketName = "images";
+      
+      const { data, error } = await supabase.storage
+        .from(bucketName)
+        .upload(finalFileName, buffer, {
+          contentType: finalContentType,
+          upsert: true
+        });
+
+      if (error) {
+        // If bucket does not exist, try to create the public bucket dynamically
+        if (error.message?.includes("not found") || error.message?.includes("does not exist") || (error as any).status === 404) {
+          console.log(`[Supabase Storage] Bucket "${bucketName}" not found. Trying to create it automatically...`);
+          const { error: createError } = await supabase.storage.createBucket(bucketName, {
+            public: true,
+            fileSizeLimit: 10485760, // 10MB
+            allowedMimeTypes: ["image/*"]
+          });
+
+          if (createError) {
+            return res.status(550).json({
+              error: `Lỗi tạo Storage bucket "${bucketName}": ${createError.message}. Hãy chắc chắn rằng bạn đã kích hoạt Storage trong Supabase Dashboard và thiết lập RLS Policy cho storage.buckets và storage.objects.`,
+              code: "BUCKET_CREATION_FAILED"
+            });
+          }
+
+          // Retry upload after creating bucket
+          const { data: retryData, error: retryError } = await supabase.storage
+            .from(bucketName)
+            .upload(finalFileName, buffer, {
+              contentType: finalContentType,
+              upsert: true
+            });
+
+          if (retryError) {
+            return res.status(500).json({
+              error: `Thất bại khi thực hiện truyền tệp lại sau khi tạo thành công Folder: ${retryError.message}`,
+              code: "UPLOAD_RETRY_FAILED"
+            });
+          }
+        } else {
+          return res.status(500).json({
+            error: `Lỗi khi upload lên Supabase Storage: ${error.message}. Gợi ý: Hãy tạo mới bucket công khai (public) tên là "images" trong bảng điều khiển Supabase Storage và thiết lập chính sách (Policy) cho phép Đọc & Ghi tự do (ALL) cho mọi người.`,
+            code: "SUPABASE_STORAGE_ERROR"
+          });
+        }
+      }
+
+      // Get public URL
+      const { data: publicUrlData } = supabase.storage
+        .from(bucketName)
+        .getPublicUrl(finalFileName);
+
+      const publicUrl = publicUrlData?.publicUrl || `${supabaseUrl}/storage/v1/object/public/${bucketName}/${finalFileName}`;
+
+      res.json({
+        success: true,
+        imageUrl: publicUrl,
+        fileName: finalFileName,
+        message: "Tải ảnh lên Supabase Storage thành công!"
+      });
+
+    } catch (err: any) {
+      console.error("[Supabase Storage API Error]:", err);
+      res.status(500).json({ error: `Lỗi máy chủ: ${err.message}` });
+    }
+  });
+
   // API - Check server health
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", time: new Date().toISOString() });
