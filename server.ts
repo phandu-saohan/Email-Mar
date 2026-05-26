@@ -738,7 +738,11 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
       res.json({ success: true, message: "Kết nối SMTP kiểm tra thành công! Sẵn sàng sử dụng." });
     } catch (error: any) {
       console.error("SMTP Test Error:", error);
-      res.status(500).json({ success: false, error: error.message || "Không thể kết nối SMTP. Vui lòng kiểm tra lại thông số." });
+      let friendlyError = error.message || String(error);
+      if (friendlyError.includes("Disabled by user from hPanel") || friendlyError.includes("554 5.7.1") || friendlyError.includes("Disabled by user")) {
+        friendlyError = `⚠️ LỖI HOSTINGER (hPanel): Tài khoản gửi thư ${smtpConfig.user} hiện đang bị vô hiệu hóa gửi từ Hostinger hPanel. Để khắc phục: 1. Đăng nhập Hostinger hPanel > Emails > Quản lý. 2. Vào mục "Tài khoản Email" (Email Accounts). 3. Nhấp dấu 3 chấm (...) bên cạnh email và chọn "Cài đặt giới hạn" (Access limits). 4. Đảm bảo "Disable sending" đã gạt sang TẮT (OFF) để mở khoá gửi thư.`;
+      }
+      res.status(500).json({ success: false, error: friendlyError });
     }
   });
 
@@ -804,8 +808,12 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
       });
     } catch (error: any) {
       console.error("SMTP Test Send Mail Error:", error);
+      let friendlyError = error.message || String(error);
+      if (friendlyError.includes("Disabled by user from hPanel") || friendlyError.includes("554 5.7.1") || friendlyError.includes("Disabled by user")) {
+        friendlyError = `⚠️ LỖI HOSTINGER (hPanel): Địa chỉ SMTP ${smtpConfig.user} hiện đang bị vô hiệu hóa gửi từ Hostinger hPanel. \n\nHướng dẫn mở lại quyền gửi:\n1. Đăng nhập vào Hostinger hPanel.\n2. Vào mục Emails > Quản lý (Manage) ở tên miền của bạn.\n3. Chọn mục "Tài khoản Email" (Email Accounts).\n4. Tìm email của bạn (${smtpConfig.user}), nhấp vào nút ba chấm (...) bên cạnh và chọn "Cài đặt giới hạn" (Access limits).\n5. Tắt tùy chọn "Vô hiệu hóa gửi" (Disable sending = OFF).\n6. Đảm bảo bạn không vi phạm giới hạn gửi số lượng lớn ngặt nghèo (200 - 500 email mỗi ngày của Hostinger).`;
+      }
       res.status(500).json({
-        error: `Không thể gửi email qua SMTP: ${error.message || "Vui lòng kiểm tra lại cấu hình kết nối tài khoản SMTP (mật khẩu ứng dụng, Server Host, Port)."}`
+        error: `Không thể gửi email qua SMTP: ${friendlyError}`
       });
     }
   });
@@ -981,12 +989,16 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
         } catch (smtpErr: any) {
           console.error(`Failed sending to ${contact.email}:`, smtpErr);
           campaign.bounceCount++;
+          let friendlyError = smtpErr.message || String(smtpErr);
+          if (friendlyError.includes("Disabled by user from hPanel") || friendlyError.includes("554 5.7.1") || friendlyError.includes("Disabled by user")) {
+            friendlyError = `⚠️ LỖI HOSTINGER EMAIL: Tài khoản ${smtpConfig.user} bị VÔ HIỆU HÓA gửi từ hPanel Hostinger. Cách giải quyết: Đăng nhập Hostinger hPanel > Emails > Quản lý danh sách tài khoản > Click dấu ba chấm cạnh email > Chọn "Access Limits" (Cài đặt giới hạn) > Tắt chế độ "Disable Sending" (Chuyển sang OFF).`;
+          }
           campaign.logs.unshift({
             timestamp: new Date().toISOString(),
             email: contact.email,
             name: contact.name,
             status: "failed",
-            message: `Gửi email thất bại: ${smtpErr.message}`,
+            message: `Gửi email thất bại: ${friendlyError}`,
           });
           syncCampaignToSupabase(campaign);
         }
