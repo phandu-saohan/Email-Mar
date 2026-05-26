@@ -102,6 +102,10 @@ async function loadCampaignsFromSupabase() {
         supabaseStatus.tableExists = false;
         supabaseStatus.message = "Thiếu bảng 'campaigns'. Hãy chạy mã tạo bảng SQL.";
         console.warn("[Supabase] Table 'campaigns' does not exist in the database.");
+      } else if (error.message?.includes("row-level security") || error.message?.includes("security policy")) {
+        supabaseStatus.error = error.message;
+        supabaseStatus.message = "Lỗi RLS: Bảng 'campaigns' bị chặn do kích hoạt RLS nhưng thiếu Policy hoặc chưa tắt RLS.";
+        console.error("[Supabase] RLS Blocked query:", error);
       } else {
         supabaseStatus.error = error.message;
         supabaseStatus.message = "Lỗi truy vấn: " + error.message;
@@ -180,6 +184,9 @@ async function syncCampaignToSupabase(campaign: Campaign) {
       if (error.message?.includes("does not exist") || error.code === "PGRST116") {
         supabaseStatus.tableExists = false;
         supabaseStatus.message = "Cần tạo bảng SQL 'campaigns' trong cơ sở dữ liệu.";
+      } else if (error.message?.includes("row-level security") || error.message?.includes("security policy")) {
+        supabaseStatus.error = error.message;
+        supabaseStatus.message = "Lỗi RLS Policy: Bảng bị chặn ghi. Hãy Tắt RLS (hoặc tạo Policy) trong Supabase SQL Editor.";
       } else {
         supabaseStatus.error = error.message;
       }
@@ -268,6 +275,9 @@ async function startServer() {
           if (error.code === "PGRST116" || error.message?.includes("does not exist")) {
             supabaseStatus.tableExists = false;
             supabaseStatus.message = "Thiếu bảng 'campaigns'. Chạy mã khởi tạo SQL bên dưới.";
+          } else if (error.message?.includes("row-level security") || error.message?.includes("security policy")) {
+            supabaseStatus.error = error.message;
+            supabaseStatus.message = "Lỗi RLS: Bảng đang bật RLS nhưng thiếu chính sách truy cập hoặc chưa tắt RLS.";
           } else {
             supabaseStatus.error = error.message;
             supabaseStatus.message = "Lỗi kết nối bảng: " + error.message;
@@ -308,7 +318,13 @@ async function startServer() {
   current_index INTEGER DEFAULT 0
 );
 
--- Cho phép đồng bộ Real-Time trong Supabase (Tùy chọn)
+-- Tắt chế độ bảo mật Row Level Security (RLS) để cho phép Node.js API đọc/ghi (Khuyên dùng và nhanh nhất)
+ALTER TABLE campaigns DISABLE ROW LEVEL SECURITY;
+
+-- HOẶC nếu bạn muốn bật RLS, hãy chạy thêm chính sách Policy này để cho phép truy cập qua api key anon:
+-- CREATE POLICY "Allow full access to campaigns" ON campaigns FOR ALL USING (true) WITH CHECK (true);
+
+-- Kích hoạt real-time cơ sở dữ liệu (Tùy chọn)
 -- ALTER PUBLICATION supabase_realtime ADD TABLE campaigns;`
     });
   });
