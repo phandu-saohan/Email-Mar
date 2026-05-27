@@ -772,24 +772,10 @@ export default function App() {
     ? Math.round(((selectedCampaign?.currentIndex || 0) / totalSendingCount) * 100) 
     : 0;
 
-  const isVercelHost = typeof window !== "undefined" && window.location.hostname.includes("vercel.app");
-  const showVercelAlert = isVercelHost && (typeof window !== "undefined" && !localStorage.getItem("api_backend_url"));
 
   return (
     <div className="flex flex-col min-h-screen bg-slate-50 font-sans text-slate-900 antialiased overflow-x-hidden">
       
-      {showVercelAlert && (
-        <div className="bg-amber-500 text-slate-950 font-bold px-4 py-2.5 text-xs text-center flex flex-col sm:flex-row items-center justify-center gap-2 select-none border-b border-amber-600/20 shadow-sm transition-all duration-300">
-          <span>⚠️ Giao diện trang tĩnh đang được chạy trên Vercel. Bạn cần trỏ đầu cuối API kết nối về máy chủ hoạt động dồi dào.</span>
-          <button 
-            onClick={() => setActiveTab("smtp")}
-            className="bg-slate-950 hover:bg-slate-900 text-white font-black px-3 py-1 rounded-lg text-[10px] uppercase transition cursor-pointer shrink-0"
-          >
-            ⚡ Sửa lỗi 404 & Cấu hình ngay
-          </button>
-        </div>
-      )}
-
       {/* HEADER: Geometric Balance Brand Bar */}
       <header className="h-16 flex items-center justify-between px-6 md:px-8 bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
         <div className="flex items-center space-x-3">
