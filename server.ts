@@ -261,23 +261,52 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Custom CORS middleware to support external deployments like Vercel with Cloud Run backend
-  app.use((req, res, next) => {
-    const origin = req.headers.origin;
-    if (origin) {
+  // ─── CORS: Always inject headers on EVERY response (including 404 / 500 errors) ───
+  // This is critical when frontend (Vercel) calls backend (Cloud Run) cross-origin.
+  const ALLOWED_ORIGINS = [
+    "https://email-mar.vercel.app",
+    "https://email-mar-git-main-phandu-saohan.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:5173",
+  ];
+
+  // Helper to inject CORS headers unconditionally
+  const injectCorsHeaders = (req: express.Request, res: express.Response) => {
+    const origin = req.headers.origin as string | undefined;
+    if (origin && ALLOWED_ORIGINS.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+    } else if (origin) {
+      // Allow any origin not in the explicit list (dev / staging environments)
       res.setHeader("Access-Control-Allow-Origin", origin);
     } else {
       res.setHeader("Access-Control-Allow-Origin", "*");
     }
     res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS, PATCH");
-    res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma");
+    res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma, X-Api-Key");
     res.setHeader("Access-Control-Allow-Credentials", "true");
-    res.setHeader("Access-Control-Max-Age", "86400"); // Cache preflight for 24 hours
-    
+    res.setHeader("Access-Control-Max-Age", "86400");
+    res.setHeader("Vary", "Origin");
+  };
+
+  // Middleware 1: Set CORS headers on every incoming request
+  app.use((req, res, next) => {
+    injectCorsHeaders(req, res);
+    // Handle preflight OPTIONS immediately — must reply 204 (no content) with headers
     if (req.method === "OPTIONS") {
-      res.sendStatus(200);
+      res.status(204).end();
       return;
     }
+    next();
+  });
+
+  // Middleware 2: Re-inject CORS on any response that Express emits AFTER routing
+  // This covers 404 / unhandled route errors where the middleware above has already run.
+  app.use((req, res, next) => {
+    const originalWriteHead = res.writeHead.bind(res);
+    (res as any).writeHead = function (statusCode: number, ...args: any[]) {
+      injectCorsHeaders(req, res);
+      return originalWriteHead(statusCode, ...args);
+    };
     next();
   });
 
@@ -1205,10 +1234,25 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
+
+    // SPA fallback — IMPORTANT: exclude /api/* so API 404s are not swallowed by index.html
+    app.get(/^(?!\/api).*$/, (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
+
+    // Explicit 404 handler for /api/* routes not matched above
+    // Ensures CORS headers are present even on unknown API paths
+    app.use("/api", (req, res) => {
+      res.status(404).json({ error: `API route not found: ${req.method} ${req.originalUrl}` });
+    });
   }
+
+  // Global error handler — always include CORS headers so browser can read the error body
+  app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error("[Global Error Handler]", err);
+    injectCorsHeaders(req, res);
+    res.status(err.status || 500).json({ error: err.message || "Internal server error" });
+  });
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server is running beautifully on port ${PORT}`);
