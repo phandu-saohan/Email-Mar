@@ -22,7 +22,13 @@ export function SmtpSettings({ smtpConfig, onSave }: SmtpSettingsProps) {
   // API Backend URL state for deployments like Vercel
   const [apiBackendUrl, setApiBackendUrl] = useState(() => {
     try {
-      return localStorage.getItem("api_backend_url") || "";
+      const url = localStorage.getItem("api_backend_url") || "";
+      // Tự động dọn dẹp URL Cloud Run cũ bị lỗi CORS
+      if (url.includes("asia-southeast1.run.app") || url.includes("kfmstvnejouesdbyvqhy37")) {
+        localStorage.removeItem("api_backend_url");
+        return "";
+      }
+      return url;
     } catch {
       return "";
     }
@@ -430,20 +436,20 @@ export function SmtpSettings({ smtpConfig, onSave }: SmtpSettingsProps) {
             <Link2 className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="text-sm font-extrabold text-slate-800">Cấu hình Đích kết nối API Backend (Dành cho Vercel / Máy chủ ngoài)</h3>
-            <p className="text-[11px] text-slate-400">Nếu bạn chạy giao diện này trên Vercel, hãy cấu hình đường dẫn này để kết nối về máy chủ API Cloud Run chính thức.</p>
+            <h3 className="text-sm font-extrabold text-slate-800">Cấu hình Đích kết nối API Backend (Dành cho Máy chủ ngoài)</h3>
+            <p className="text-[11px] text-slate-400">Hiện tại hệ thống đã chạy API Serverless trực tiếp trên Vercel, không cần cấu hình thêm.</p>
           </div>
         </div>
 
         <div className="space-y-3">
           <p className="text-xs text-slate-600 leading-normal">
-            Giao diện chạy trên <strong>Vercel (email-mar.vercel.app)</strong> chỉ là trang tĩnh (SPA). Các chức năng như <strong>gửi SMTP thật, sử dụng AI Gemini</strong> yêu cầu máy chủ Node.js hoạt động. Hãy điền liên kết máy chủ Cloud Run của bạn vào đây:
+            Hệ thống đã được tích hợp đầy đủ các chức năng <strong>gửi SMTP thật, sử dụng AI Gemini</strong> trực tiếp trên Vercel dưới dạng Serverless API. Bạn chỉ cần cấu hình cổng API ngoài này nếu tự chạy một máy chủ Backend riêng:
           </p>
 
           <div className="flex flex-col sm:flex-row gap-3">
             <input
               type="url"
-              placeholder="https://ais-pre-kfmstvnejouesdbyvqhy37-329591203279.asia-southeast1.run.app"
+              placeholder="Ví dụ: http://localhost:3000 hoặc URL API của bạn"
               value={apiBackendUrl}
               onChange={(e) => setApiBackendUrl(e.target.value)}
               className="flex-1 px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:border-indigo-500 bg-white text-slate-800 shadow-sm"
@@ -462,7 +468,7 @@ export function SmtpSettings({ smtpConfig, onSave }: SmtpSettingsProps) {
                   onClick={() => {
                     setApiBackendUrl("");
                     localStorage.removeItem("api_backend_url");
-                    alert("✓ Đã xóa cấu hình API Backend. Hệ thống sẽ sử dụng relative routes mặc định.");
+                    alert("✓ Đã xóa cấu hình API Backend. Hệ thống sẽ sử dụng Vercel Serverless API mặc định.");
                     window.location.reload();
                   }}
                   className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold px-3 py-2 text-xs rounded-lg transition shrink-0"
@@ -473,9 +479,8 @@ export function SmtpSettings({ smtpConfig, onSave }: SmtpSettingsProps) {
             </div>
           </div>
 
-          <div className="p-3 bg-indigo-50/50 border border-indigo-100 rounded-xl text-[10px] text-indigo-850 leading-relaxed font-semibold">
-            💡 <strong>Gợi ý:</strong> Bạn có thể sử dụng URL Cloud Run chính thức của dự án này làm Backend API Endpoint:<br />
-            <code className="text-indigo-900 bg-indigo-100/60 px-1 py-0.5 rounded select-all block mt-1 break-all">https://ais-pre-kfmstvnejouesdbyvqhy37-329591203279.asia-southeast1.run.app</code>
+          <div className="p-3 bg-emerald-50 border border-emerald-100 rounded-xl text-[10px] text-emerald-850 leading-relaxed font-semibold">
+            💡 <strong>Thông tin:</strong> Mặc định khi bỏ trống ô trên, hệ thống sẽ sử dụng Relative Route (ví dụ: <code>/api/campaigns</code>) để gọi trực tiếp các Serverless Function chạy cùng domain trên Vercel của bạn, đảm bảo hoạt động hoàn hảo 100% không bị chặn CORS.
           </div>
         </div>
       </div>

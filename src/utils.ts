@@ -3,8 +3,14 @@ export function getApiUrl(path: string): string {
     // Allow manual override via localStorage (for custom backend deployments)
     const customUrl = localStorage.getItem("api_backend_url");
     if (customUrl && customUrl.trim()) {
-      const origin = customUrl.trim().replace(/\/$/, "");
-      return `${origin}${path}`;
+      const trimmedUrl = customUrl.trim();
+      // Tự động dọn dẹp URL Cloud Run cũ bị lỗi CORS để chuyển hướng về Vercel API
+      if (trimmedUrl.includes("asia-southeast1.run.app") || trimmedUrl.includes("kfmstvnejouesdbyvqhy37")) {
+        localStorage.removeItem("api_backend_url");
+      } else {
+        const origin = trimmedUrl.replace(/\/$/, "");
+        return `${origin}${path}`;
+      }
     }
   } catch (e) {
     console.warn("Lỗi đọc api_backend_url từ localStorage:", e);
