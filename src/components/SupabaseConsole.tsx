@@ -392,7 +392,7 @@ export function SupabaseConsole() {
             {/* Big Step-by-step SQL Runner Guide if not set or table missing */}
             <div className="p-6 rounded-2xl border border-slate-150 bg-slate-50 space-y-4">
               <div className="flex items-center gap-2">
-                <span className="p-1 px-2.5 bg-indigo-650 text-white rounded-lg text-[10px] font-black">HƯỚNG DẪN THIẾT LẬP THẬT</span>
+                <span className="p-1 px-2.5 bg-indigo-600 text-white rounded-lg text-[10px] font-black">HƯỚNG DẪN THIẾT LẬP THẬT</span>
                 <span className="text-xs text-slate-500 font-bold font-mono">Chỉ mất 1 phút</span>
               </div>
 

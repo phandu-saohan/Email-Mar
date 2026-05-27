@@ -346,7 +346,7 @@ export function SmtpSettings({ smtpConfig, onSave }: SmtpSettingsProps) {
             </button>
             <button
               type="submit"
-              className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-extrabold rounded-xl bg-indigo-650 hover:bg-indigo-700 text-white shadow-sm hover:shadow transition"
+              className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-extrabold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm hover:shadow transition"
             >
               Lưu cấu hình SMTP
             </button>
