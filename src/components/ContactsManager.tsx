@@ -466,6 +466,7 @@ export function ContactsManager() {
               </p>
             </div>
           ) : (
+            <>
               {/* Desktop Table View */}
               <table className="w-full text-left border-collapse hidden md:table">
                 <thead>
@@ -542,6 +543,7 @@ export function ContactsManager() {
                   );
                 })}
               </div>
+            </>
           )}
         </div>
 
