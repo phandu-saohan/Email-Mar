@@ -292,6 +292,13 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<"campaigns" | "smtp" | "newCampaign" | "supabase" | "contacts">("campaigns");
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile">("desktop");
+
+  // Campaign Sub-tab and Reporting states
+  const [campaignSubTab, setCampaignSubTab] = useState<"monitor" | "report">("monitor");
+  const [reportSearch, setReportSearch] = useState("");
+  const [reportFilterStatus, setReportFilterStatus] = useState<"all" | "success" | "failed" | "pending">("all");
+  const [reportFilterInteract, setReportFilterInteract] = useState<"all" | "opened" | "clicked" | "none">("all");
+  const [reportPage, setReportPage] = useState(1);
   const [previewContactIndex, setPreviewContactIndex] = useState(0);
   const [isAiConfigured, setIsAiConfigured] = useState(true);
 
@@ -798,6 +805,118 @@ export default function App() {
     ? Math.round(((selectedCampaign?.currentIndex || 0) / totalSendingCount) * 100) 
     : 0;
 
+  const getContactReportData = (campaign: Campaign) => {
+    if (!campaign || !campaign.contacts) return [];
+
+    const emailLogsMap: Record<string, {
+      deliveryStatus: "success" | "failed" | "pending";
+      errorDetails: string;
+      interaction: "clicked" | "opened" | "none";
+      lastUpdated: string;
+    }> = {};
+
+    campaign.contacts.forEach(contact => {
+      emailLogsMap[contact.email.toLowerCase()] = {
+        deliveryStatus: "pending",
+        errorDetails: "",
+        interaction: "none",
+        lastUpdated: campaign.createdAt || new Date().toISOString()
+      };
+    });
+
+    if (campaign.logs && Array.isArray(campaign.logs)) {
+      campaign.logs.forEach(log => {
+        const emailKey = log.email.toLowerCase();
+        if (!emailLogsMap[emailKey]) {
+          emailLogsMap[emailKey] = {
+            deliveryStatus: "pending",
+            errorDetails: "",
+            interaction: "none",
+            lastUpdated: log.timestamp
+          };
+        }
+
+        const current = emailLogsMap[emailKey];
+        current.lastUpdated = log.timestamp;
+
+        if (log.status === "success") {
+          current.deliveryStatus = "success";
+        } else if (log.status === "failed") {
+          current.deliveryStatus = "failed";
+          current.errorDetails = log.message;
+        } else if (log.status === "opened") {
+          if (current.interaction !== "clicked") {
+            current.interaction = "opened";
+          }
+        } else if (log.status === "clicked") {
+          current.interaction = "clicked";
+        }
+      });
+    }
+
+    return campaign.contacts.map(contact => {
+      const emailKey = contact.email.toLowerCase();
+      const logInfo = emailLogsMap[emailKey] || {
+        deliveryStatus: "pending",
+        errorDetails: "",
+        interaction: "none",
+        lastUpdated: campaign.createdAt || new Date().toISOString()
+      };
+
+      return {
+        id: contact.id,
+        name: contact.name,
+        email: contact.email,
+        company: contact.company || "Không có",
+        deliveryStatus: logInfo.deliveryStatus,
+        errorDetails: logInfo.errorDetails,
+        interaction: logInfo.interaction,
+        lastUpdated: logInfo.lastUpdated
+      };
+    });
+  };
+
+  const downloadCsvReport = (campaign: Campaign) => {
+    if (!campaign) return;
+    const reportData = getContactReportData(campaign);
+    
+    let csvContent = "\ufeff";
+    csvContent += "Họ Tên,Email,Công Ty,Trạng Thái Gửi,Tương Tác,Lỗi Chi Tiết,Thời Gian Cập Nhật\n";
+
+    reportData.forEach(row => {
+      const name = `"${row.name.replace(/"/g, '""')}"`;
+      const email = `"${row.email.replace(/"/g, '""')}"`;
+      const company = `"${row.company.replace(/"/g, '""')}"`;
+      
+      let deliveryStr = "Chưa gửi";
+      if (row.deliveryStatus === "success") deliveryStr = "Đã gửi thành công";
+      if (row.deliveryStatus === "failed") deliveryStr = "Thất bại";
+
+      let interactStr = "Chưa tương tác";
+      if (row.interaction === "opened") interactStr = "Đã mở thư";
+      if (row.interaction === "clicked") interactStr = "Đã click liên kết";
+
+      const error = `"${row.errorDetails.replace(/"/g, '""')}"`;
+      const timeStr = `"${new Date(row.lastUpdated).toLocaleString("vi-VN")}"`;
+
+      csvContent += `${name},${email},${company},${deliveryStr},${interactStr},${error},${timeStr}\n`;
+    });
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    
+    const cleanCampName = campaign.name
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zA-Z0-9]/g, "_");
+    
+    link.setAttribute("download", `bao_cao_chien_dich_${cleanCampName}_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   return (
     <div className="flex flex-col min-h-screen bg-slate-50 font-sans text-slate-900 antialiased overflow-x-hidden">
@@ -1333,6 +1452,33 @@ export default function App() {
                         />
                       </div>
                     </div>
+
+                    {/* Sub-tab Navigation */}
+                    <div className="mt-6 pt-4 border-t border-slate-100 flex items-center gap-3">
+                      <button
+                        onClick={() => setCampaignSubTab("monitor")}
+                        className={`px-4 py-2 text-xs font-bold rounded-xl transition flex items-center gap-1.5 ${
+                          campaignSubTab === "monitor"
+                            ? "bg-indigo-600 text-white shadow-sm"
+                            : "bg-slate-105 text-slate-600 hover:bg-slate-200"
+                        }`}
+                      >
+                        🖥️ Console & Xem Thử Thư
+                      </button>
+                      <button
+                        onClick={() => {
+                          setCampaignSubTab("report");
+                          setReportPage(1);
+                        }}
+                        className={`px-4 py-2 text-xs font-bold rounded-xl transition flex items-center gap-1.5 ${
+                          campaignSubTab === "report"
+                            ? "bg-indigo-600 text-white shadow-sm"
+                            : "bg-slate-105 text-slate-600 hover:bg-slate-200"
+                        }`}
+                      >
+                        📊 Danh Sách Người Nhận & Báo Cáo
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div className="text-center py-6 text-slate-400 text-sm">
@@ -1341,145 +1487,455 @@ export default function App() {
                 )}
               </div>
 
-              {/* Real-time Email Visualizer & Customer View */}
+              {/* Real-time Email Visualizer & Customer View or Detailed Report */}
               {selectedCampaign && (
-                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden grid grid-cols-1 md:grid-cols-2">
-                  
-                  {/* Left Column: Email Preview Window */}
-                  <div className="border-r border-slate-100 flex flex-col">
-                    <div className="p-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
-                      <div className="flex items-center gap-1.5">
-                        <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping" />
-                        <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Xem thử trực tiếp từ hộp thư</span>
-                      </div>
-                      <div className="flex items-center gap-1 bg-white p-1 rounded-lg border border-slate-200 shadow-sm">
-                        <button
-                          onClick={() => setPreviewDevice("desktop")}
-                          className={`p-1.5 rounded transition ${previewDevice === "desktop" ? "bg-indigo-50 text-indigo-700" : "text-slate-400 hover:text-slate-600"}`}
-                          title="Giao diện máy tính"
-                        >
-                          <Laptop className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          onClick={() => setPreviewDevice("mobile")}
-                          className={`p-1.5 rounded transition ${previewDevice === "mobile" ? "bg-indigo-50 text-indigo-700" : "text-slate-400 hover:text-slate-600"}`}
-                          title="Giao diện điện thoại"
-                        >
-                          <Phone className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="p-5 border-b border-slate-100 bg-indigo-50/10">
-                      <div className="space-y-2 text-xs">
-                        <div className="flex">
-                          <span className="w-16 font-semibold text-slate-400">Tiêu đề:</span>
-                          <span className="font-bold text-slate-800 flex-1">
-                            {compileText(selectedCampaign.subject, activeContactForPreview)}
-                          </span>
+                <>
+                  {campaignSubTab === "monitor" ? (
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden grid grid-cols-1 md:grid-cols-2 animate-in fade-in duration-200">
+                      
+                      {/* Left Column: Email Preview Window */}
+                      <div className="border-r border-slate-100 flex flex-col">
+                        <div className="p-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                          <div className="flex items-center gap-1.5">
+                            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping" />
+                            <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Xem thử trực tiếp từ hộp thư</span>
+                          </div>
+                          <div className="flex items-center gap-1 bg-white p-1 rounded-lg border border-slate-200 shadow-sm">
+                            <button
+                              onClick={() => setPreviewDevice("desktop")}
+                              className={`p-1.5 rounded transition ${previewDevice === "desktop" ? "bg-indigo-50 text-indigo-700" : "text-slate-400 hover:text-slate-600"}`}
+                              title="Giao diện máy tính"
+                            >
+                              <Laptop className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              onClick={() => setPreviewDevice("mobile")}
+                              className={`p-1.5 rounded transition ${previewDevice === "mobile" ? "bg-indigo-50 text-indigo-700" : "text-slate-400 hover:text-slate-600"}`}
+                              title="Giao diện điện thoại"
+                            >
+                              <Phone className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex">
-                          <span className="w-16 font-semibold text-slate-400">Gửi đến:</span>
-                          <span className="text-indigo-600 font-bold flex-1 flex items-center gap-1.5">
-                            {activeContactForPreview?.name} ({activeContactForPreview?.email})
-                            <span className="text-[10px] text-slate-400 font-normal">
-                              - Công ty: {activeContactForPreview?.company}
+
+                        <div className="p-5 border-b border-slate-100 bg-indigo-50/10">
+                          <div className="space-y-2 text-xs">
+                            <div className="flex">
+                              <span className="w-16 font-semibold text-slate-400">Tiêu đề:</span>
+                              <span className="font-bold text-slate-800 flex-1">
+                                {compileText(selectedCampaign.subject, activeContactForPreview)}
+                              </span>
+                            </div>
+                            <div className="flex">
+                              <span className="w-16 font-semibold text-slate-400">Gửi đến:</span>
+                              <span className="text-indigo-600 font-bold flex-1 flex items-center gap-1.5">
+                                {activeContactForPreview?.name} ({activeContactForPreview?.email})
+                                <span className="text-[10px] text-slate-400 font-normal">
+                                  - Công ty: {activeContactForPreview?.company}
+                                </span>
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Email body render */}
+                        <div className="p-4 flex-1 bg-slate-100 min-h-[350px] flex items-center justify-center">
+                          <div
+                            className={`bg-white rounded-lg shadow-sm border border-slate-200 overflow-auto transition-all ${
+                              previewDevice === "desktop" ? "w-full max-w-full" : "w-[340px] max-w-full h-[450px]"
+                            }`}
+                          >
+                            <iframe
+                              title="Email Preview Inside Sandbox"
+                              sandbox="allow-same-origin"
+                              srcDoc={compileText(selectedCampaign.body, activeContactForPreview)}
+                              className="w-full h-full border-none min-h-[320px] bg-white scroll-p-2"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                          <span className="font-medium">Thư thứ {previewContactIndex + 1} / {currentContacts.length}</span>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => setPreviewContactIndex(prev => Math.max(0, prev - 1))}
+                              disabled={previewContactIndex === 0}
+                              className="px-2.5 py-1 bg-white border border-slate-200 hover:bg-slate-100 rounded text-slate-700 transition font-semibold disabled:opacity-55"
+                            >
+                              ⇦ Trước
+                            </button>
+                            <button
+                              onClick={() => setPreviewContactIndex(prev => Math.min(currentContacts.length - 1, prev + 1))}
+                              disabled={previewContactIndex >= currentContacts.length - 1}
+                              className="px-2.5 py-1 bg-white border border-slate-200 hover:bg-slate-100 rounded text-slate-700 transition font-semibold disabled:opacity-55"
+                            >
+                              Sau ⇨
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Right Column: Interactive SMTP Terminal Exchanges & Logs */}
+                      <div className="flex flex-col">
+                        <div className="p-4 bg-slate-900 text-indigo-400 border-b border-indigo-950 flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Terminal className="h-4 w-4 text-emerald-400" />
+                            <span className="text-xs font-bold uppercase tracking-wider font-mono text-slate-100">
+                              Bảng giám sát giao tiếp socket smtp
                             </span>
-                          </span>
+                          </div>
+                          <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
                         </div>
-                      </div>
-                    </div>
 
-                    {/* Email body render */}
-                    <div className="p-4 flex-1 bg-slate-100 min-h-[350px] flex items-center justify-center">
-                      <div
-                        className={`bg-white rounded-lg shadow-sm border border-slate-200 overflow-auto transition-all ${
-                          previewDevice === "desktop" ? "w-full max-w-full" : "w-[340px] max-w-full h-[450px]"
-                        }`}
-                      >
-                        <iframe
-                          title="Email Preview Inside Sandbox"
-                          sandbox="allow-same-origin"
-                          srcDoc={compileText(selectedCampaign.body, activeContactForPreview)}
-                          className="w-full h-full border-none min-h-[320px] bg-white scroll-p-2"
-                        />
-                      </div>
-                    </div>
+                        {/* Simulation logs list */}
+                        <div className="p-4 flex-1 bg-slate-950 text-slate-350 font-mono text-[11px] leading-relaxed overflow-y-auto max-h-[500px]">
+                          {selectedCampaign.logs && selectedCampaign.logs.length > 0 ? (
+                            <div className="space-y-2">
+                              {selectedCampaign.logs.map((log, index) => {
+                                let colorClass = "text-slate-400";
+                                if (log.status === "success") colorClass = "text-emerald-400 font-semibold";
+                                if (log.status === "failed") colorClass = "text-rose-400 font-bold bg-rose-950/20 px-1 py-0.5 rounded";
+                                if (log.status === "opened") colorClass = "text-yellow-400";
+                                if (log.status === "clicked") colorClass = "text-cyan-400 font-extrabold animate-bounce";
+                                if (log.status === "connecting" || log.status === "delivering") colorClass = "text-blue-400";
 
-                    <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-                      <span className="font-medium">Thư thứ {previewContactIndex + 1} / {currentContacts.length}</span>
-                      <div className="flex gap-2">
+                                return (
+                                  <div key={index} className="border-b border-slate-900/60 pb-1.5">
+                                    <div className="flex justify-between text-[10px] text-slate-500 mb-0.5">
+                                      <span>[{new Date(log.timestamp).toLocaleTimeString()}]</span>
+                                      <span>{log.email}</span>
+                                    </div>
+                                    <div className={colorClass}>
+                                      {log.message}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="text-center py-20 text-slate-500 italic">
+                              <p>Bảng điện tử trống.</p>
+                              <p className="text-[10px] mt-2">Bấm "BẮT ĐẦU GỬI" để theo dõi trực tiếp chuỗi nhật ký SMTP (MAIL FROM, AUTH LOGIN, RCPT TO, rác thải, bounce rate v.v.)</p>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="p-3 bg-slate-900 border-t border-slate-900 text-[10px] text-slate-400 flex items-center justify-between">
+                          <span className="font-mono">Mã hóa socket: TLS / SSL Sec</span>
+                          <span>Hãng: SMTP Node - Simulator Pro</span>
+                        </div>
+
+                      </div>
+
+                    </div>
+                  ) : (
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6 animate-in fade-in duration-200">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                        <div>
+                          <h3 className="text-base font-bold text-slate-800 flex items-center gap-1.5">
+                            📊 Báo Cáo Tiếp Thị Chi Tiết
+                          </h3>
+                          <p className="text-xs text-slate-400 mt-0.5">Số liệu phân tích hành vi tương tác và trạng thái truyền phát thực tế</p>
+                        </div>
                         <button
-                          onClick={() => setPreviewContactIndex(prev => Math.max(0, prev - 1))}
-                          disabled={previewContactIndex === 0}
-                          className="px-2.5 py-1 bg-white border border-slate-200 hover:bg-slate-100 rounded text-slate-700 transition font-semibold disabled:opacity-55"
+                          onClick={() => downloadCsvReport(selectedCampaign)}
+                          className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition shadow-sm self-start sm:self-auto"
                         >
-                          ⇦ Trước
-                        </button>
-                        <button
-                          onClick={() => setPreviewContactIndex(prev => Math.min(currentContacts.length - 1, prev + 1))}
-                          disabled={previewContactIndex >= currentContacts.length - 1}
-                          className="px-2.5 py-1 bg-white border border-slate-200 hover:bg-slate-100 rounded text-slate-700 transition font-semibold disabled:opacity-55"
-                        >
-                          Sau ⇨
+                          <Download className="h-4 w-4" /> Xuất Báo Cáo CSV
                         </button>
                       </div>
-                    </div>
-                  </div>
 
-                  {/* Right Column: Interactive SMTP Terminal Exchanges & Logs */}
-                  <div className="flex flex-col">
-                    <div className="p-4 bg-slate-900 text-indigo-400 border-b border-indigo-950 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Terminal className="h-4 w-4 text-emerald-400" />
-                        <span className="text-xs font-bold uppercase tracking-wider font-mono text-slate-100">
-                          Bảng giám sát giao tiếp socket smtp
-                        </span>
-                      </div>
-                      <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                    </div>
+                      {/* Visual Dashboard Charts */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        
+                        {/* Donut Chart: Delivery Status */}
+                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col items-center justify-center text-center">
+                          <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Tỷ lệ truyền gửi</h4>
+                          <div className="relative w-28 h-28 flex items-center justify-center">
+                            {/* SVG Donut Chart */}
+                            <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+                              <circle cx="18" cy="18" r="15.915" fill="none" stroke="#e2e8f0" strokeWidth="3" />
+                              {(() => {
+                                const total = selectedCampaign.contacts.length || 1;
+                                const reportData = getContactReportData(selectedCampaign);
+                                const successCount = reportData.filter(r => r.deliveryStatus === "success").length;
+                                const failedCount = reportData.filter(r => r.deliveryStatus === "failed").length;
+                                
+                                const sPct = (successCount / total) * 100;
+                                const fPct = (failedCount / total) * 100;
+                                const strokeDashSuccess = `${sPct} ${100 - sPct}`;
+                                const strokeDashFailed = `${fPct} ${100 - fPct}`;
+                                
+                                return (
+                                  <>
+                                    {sPct > 0 && (
+                                      <circle cx="18" cy="18" r="15.915" fill="none" stroke="#10b981" strokeWidth="3" 
+                                              strokeDasharray={strokeDashSuccess} strokeDashoffset="0" />
+                                    )}
+                                    {fPct > 0 && (
+                                      <circle cx="18" cy="18" r="15.915" fill="none" stroke="#f43f5e" strokeWidth="3" 
+                                              strokeDasharray={strokeDashFailed} strokeDashoffset={-sPct} />
+                                    )}
+                                  </>
+                                );
+                              })()}
+                            </svg>
+                            <div className="absolute flex flex-col items-center justify-center">
+                              <span className="text-lg font-black text-slate-800">
+                                {selectedCampaign.contacts.length > 0 
+                                  ? Math.round((getContactReportData(selectedCampaign).filter(r => r.deliveryStatus === "success").length / selectedCampaign.contacts.length) * 100)
+                                  : 0}%
+                              </span>
+                              <span className="text-[9px] font-bold text-emerald-600 uppercase tracking-wide">Thành công</span>
+                            </div>
+                          </div>
+                          
+                          <div className="flex gap-4 mt-3 text-[10px] font-semibold text-slate-500">
+                            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 bg-emerald-500 rounded-full" /> Thành công</span>
+                            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 bg-rose-500 rounded-full" /> Thất bại</span>
+                            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 bg-slate-300 rounded-full" /> Chờ gửi</span>
+                          </div>
+                        </div>
 
-                    {/* Simulation logs list */}
-                    <div className="p-4 flex-1 bg-slate-950 text-slate-350 font-mono text-[11px] leading-relaxed overflow-y-auto max-h-[500px]">
-                      {selectedCampaign.logs && selectedCampaign.logs.length > 0 ? (
-                        <div className="space-y-2">
-                          {selectedCampaign.logs.map((log, index) => {
-                            let colorClass = "text-slate-400";
-                            if (log.status === "success") colorClass = "text-emerald-400 font-semibold";
-                            if (log.status === "failed") colorClass = "text-rose-400 font-bold bg-rose-950/20 px-1 py-0.5 rounded";
-                            if (log.status === "opened") colorClass = "text-yellow-400";
-                            if (log.status === "clicked") colorClass = "text-cyan-400 font-extrabold animate-bounce";
-                            if (log.status === "connecting" || log.status === "delivering") colorClass = "text-blue-400";
+                        {/* Interactive Engagement Progress Bars */}
+                        <div className="p-5 bg-slate-50 rounded-2xl border border-slate-200 md:col-span-2 flex flex-col justify-between">
+                          <h4 className="text-xs font-bold text-slate-550 uppercase tracking-wider mb-2">Chỉ số tương tác khách hàng (Dựa trên số đã gửi thành công)</h4>
+                          
+                          {(() => {
+                            const reportData = getContactReportData(selectedCampaign);
+                            const successTotal = reportData.filter(r => r.deliveryStatus === "success").length || 1;
+                            
+                            const openedCount = reportData.filter(r => r.interaction === "opened" || r.interaction === "clicked").length;
+                            const clickedCount = reportData.filter(r => r.interaction === "clicked").length;
+                            const noneCount = reportData.filter(r => r.interaction === "none" && r.deliveryStatus === "success").length;
+                            
+                            const openPct = Math.round((openedCount / successTotal) * 100);
+                            const clickPct = Math.round((clickedCount / successTotal) * 100);
+                            const nonePct = Math.round((noneCount / successTotal) * 100);
 
                             return (
-                              <div key={index} className="border-b border-slate-900/60 pb-1.5">
-                                <div className="flex justify-between text-[10px] text-slate-500 mb-0.5">
-                                  <span>[{new Date(log.timestamp).toLocaleTimeString()}]</span>
-                                  <span>{log.email}</span>
+                              <div className="space-y-3.5">
+                                <div className="space-y-1">
+                                  <div className="flex justify-between text-xs font-bold text-slate-700">
+                                    <span className="flex items-center gap-1">📬 Tỷ lệ mở email (Opens)</span>
+                                    <span>{openPct}% ({openedCount} người)</span>
+                                  </div>
+                                  <div className="w-full bg-slate-205 rounded-full h-2 overflow-hidden">
+                                    <div className="bg-indigo-650 h-2 rounded-full transition-all" style={{ width: `${openPct}%` }} />
+                                  </div>
                                 </div>
-                                <div className={colorClass}>
-                                  {log.message}
+
+                                <div className="space-y-1">
+                                  <div className="flex justify-between text-xs font-bold text-slate-700">
+                                    <span className="flex items-center gap-1">⚡ Tỷ lệ kích liên kết (Clicks)</span>
+                                    <span>{clickPct}% ({clickedCount} người)</span>
+                                  </div>
+                                  <div className="w-full bg-slate-205 rounded-full h-2 overflow-hidden">
+                                    <div className="bg-amber-500 h-2 rounded-full transition-all" style={{ width: `${clickPct}%` }} />
+                                  </div>
+                                </div>
+
+                                <div className="space-y-1">
+                                  <div className="flex justify-between text-xs font-bold text-slate-700">
+                                    <span className="flex items-center gap-1">💤 Chưa tương tác (No action)</span>
+                                    <span>{nonePct}% ({noneCount} người)</span>
+                                  </div>
+                                  <div className="w-full bg-slate-205 rounded-full h-2 overflow-hidden">
+                                    <div className="bg-slate-400 h-2 rounded-full transition-all" style={{ width: `${nonePct}%` }} />
+                                  </div>
                                 </div>
                               </div>
                             );
-                          })}
+                          })()}
                         </div>
-                      ) : (
-                        <div className="text-center py-20 text-slate-500 italic">
-                          <p>Bảng điện tử trống.</p>
-                          <p className="text-[10px] mt-2">Bấm "BẮT ĐẦU GỬI" để theo dõi trực tiếp chuỗi nhật ký SMTP (MAIL FROM, AUTH LOGIN, RCPT TO, rác thải, bounce rate v.v.)</p>
+
+                      </div>
+
+                      {/* Recipient Table Filters */}
+                      <div className="space-y-3">
+                        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                          <div className="text-xs font-bold text-slate-700 font-semibold">Bộ lọc danh sách người nhận</div>
+                          
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 flex-1 lg:max-w-2xl">
+                            {/* Search field */}
+                            <input
+                              type="text"
+                              placeholder="Tìm tên / email..."
+                              value={reportSearch}
+                              onChange={(e) => {
+                                setReportSearch(e.target.value);
+                                setReportPage(1);
+                              }}
+                              className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 bg-white"
+                            />
+                            
+                            {/* Filter Delivery Status */}
+                            <select
+                              value={reportFilterStatus}
+                              onChange={(e) => {
+                                setReportFilterStatus(e.target.value as any);
+                                setReportPage(1);
+                              }}
+                              className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 bg-white text-slate-600 font-semibold"
+                            >
+                              <option value="all">Tất cả Trạng thái gửi</option>
+                              <option value="success">✅ Đã gửi thành công</option>
+                              <option value="failed">❌ Gửi thất bại</option>
+                              <option value="pending">⏳ Đang chờ gửi</option>
+                            </select>
+
+                            {/* Filter Interaction */}
+                            <select
+                              value={reportFilterInteract}
+                              onChange={(e) => {
+                                setReportFilterInteract(e.target.value as any);
+                                setReportPage(1);
+                              }}
+                              className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 bg-white text-slate-600 font-semibold"
+                            >
+                              <option value="all">Tất cả tương tác</option>
+                              <option value="opened">📬 Đã mở thư</option>
+                              <option value="clicked">⚡ Đã click liên kết</option>
+                              <option value="none">💤 Chưa tương tác</option>
+                            </select>
+                          </div>
                         </div>
-                      )}
+
+                        {/* Recipient status Table */}
+                        <div className="overflow-x-auto border border-slate-200 rounded-xl bg-white shadow-sm">
+                          {(() => {
+                            const rawReportData = getContactReportData(selectedCampaign);
+                            
+                            const filteredData = rawReportData.filter(row => {
+                              const matchSearch = row.name.toLowerCase().includes(reportSearch.toLowerCase()) || 
+                                                  row.email.toLowerCase().includes(reportSearch.toLowerCase());
+                              
+                              let matchStatus = true;
+                              if (reportFilterStatus === "success") matchStatus = row.deliveryStatus === "success";
+                              if (reportFilterStatus === "failed") matchStatus = row.deliveryStatus === "failed";
+                              if (reportFilterStatus === "pending") matchStatus = row.deliveryStatus === "pending";
+
+                              let matchInteract = true;
+                              if (reportFilterInteract === "opened") matchInteract = row.interaction === "opened" || row.interaction === "clicked";
+                              if (reportFilterInteract === "clicked") matchInteract = row.interaction === "clicked";
+                              if (reportFilterInteract === "none") matchInteract = row.interaction === "none" && row.deliveryStatus === "success";
+
+                              return matchSearch && matchStatus && matchInteract;
+                            });
+
+                            const itemsPerPage = 10;
+                            const totalPages = Math.ceil(filteredData.length / itemsPerPage) || 1;
+                            const currentPageData = filteredData.slice((reportPage - 1) * itemsPerPage, reportPage * itemsPerPage);
+
+                            return (
+                              <>
+                                <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
+                                  <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider">
+                                    <tr>
+                                      <th className="px-4 py-3">Người Nhận & Email</th>
+                                      <th className="px-4 py-3">Công Ty</th>
+                                      <th className="px-4 py-3">Trạng Thái Gửi</th>
+                                      <th className="px-4 py-3">Tương Tác</th>
+                                      <th className="px-4 py-3">Cập Nhật Cuối</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100 text-slate-650">
+                                    {currentPageData.length === 0 ? (
+                                      <tr>
+                                        <td colSpan={5} className="px-4 py-8 text-center text-slate-400 italic">
+                                          Không tìm thấy dữ liệu người nhận phù hợp với bộ lọc.
+                                        </td>
+                                      </tr>
+                                    ) : (
+                                      currentPageData.map((row) => (
+                                        <tr key={row.id} className="hover:bg-slate-50/50 transition">
+                                          <td className="px-4 py-3">
+                                            <div className="font-bold text-slate-800">{row.name}</div>
+                                            <div className="text-[10px] text-slate-400 font-semibold">{row.email}</div>
+                                          </td>
+                                          <td className="px-4 py-3 font-medium text-slate-500">{row.company}</td>
+                                          <td className="px-4 py-3">
+                                            {row.deliveryStatus === "success" && (
+                                              <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 uppercase tracking-wide">
+                                                ✓ Thành công
+                                              </span>
+                                            )}
+                                            {row.deliveryStatus === "failed" && (
+                                              <div className="space-y-0.5">
+                                                <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800 uppercase tracking-wide">
+                                                  ✗ Thất bại
+                                                </span>
+                                                {row.errorDetails && (
+                                                  <div className="text-[9px] text-rose-500 font-medium max-w-xs truncate" title={row.errorDetails}>
+                                                    {row.errorDetails}
+                                                  </div>
+                                                )}
+                                              </div>
+                                            )}
+                                            {row.deliveryStatus === "pending" && (
+                                              <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-800 uppercase tracking-wide">
+                                                ⏳ Chờ gửi
+                                              </span>
+                                            )}
+                                          </td>
+                                          <td className="px-4 py-3">
+                                            {row.interaction === "clicked" && (
+                                              <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 uppercase tracking-wide">
+                                                ⚡ Đã Click Link
+                                              </span>
+                                            )}
+                                            {row.interaction === "opened" && (
+                                              <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 uppercase tracking-wide">
+                                                📬 Đã Mở Thư
+                                              </span>
+                                            )}
+                                            {row.interaction === "none" && (
+                                              <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-400 uppercase tracking-wide">
+                                                💤 Chưa tương tác
+                                              </span>
+                                            )}
+                                          </td>
+                                          <td className="px-4 py-3 text-[10px] font-semibold text-slate-400 font-mono">
+                                            {new Date(row.lastUpdated).toLocaleString("vi-VN", { dateStyle: "short", timeStyle: "short" })}
+                                          </td>
+                                        </tr>
+                                      ))
+                                    )}
+                                  </tbody>
+                                </table>
+
+                                {/* Pagination Controls */}
+                                {filteredData.length > itemsPerPage && (
+                                  <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs font-semibold text-slate-550">
+                                    <span>
+                                      Hiển thị {(reportPage - 1) * itemsPerPage + 1} - {Math.min(reportPage * itemsPerPage, filteredData.length)} trong tổng số {filteredData.length} người
+                                    </span>
+                                    <div className="flex gap-2">
+                                      <button
+                                        onClick={() => setReportPage(prev => Math.max(1, prev - 1))}
+                                        disabled={reportPage === 1}
+                                        className="px-3 py-1 bg-white border border-slate-200 hover:bg-slate-100 rounded text-slate-700 transition font-bold disabled:opacity-50"
+                                      >
+                                        ⇦ Trước
+                                      </button>
+                                      <button
+                                        onClick={() => setReportPage(prev => Math.min(totalPages, prev + 1))}
+                                        disabled={reportPage === totalPages}
+                                        className="px-3 py-1 bg-white border border-slate-200 hover:bg-slate-100 rounded text-slate-700 transition font-bold disabled:opacity-50"
+                                      >
+                                        Sau ⇨
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </div>
+                      </div>
                     </div>
-
-                    <div className="p-3 bg-slate-900 border-t border-slate-900 text-[10px] text-slate-400 flex items-center justify-between">
-                      <span className="font-mono">Mã hóa socket: TLS / SSL Sec</span>
-                      <span>Hãng: SMTP Node - Simulator Pro</span>
-                    </div>
-
-                  </div>
-
-                </div>
+                  )}
+                </>
               )}
             </div>
           )}
