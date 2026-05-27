@@ -4,6 +4,7 @@ import { Campaign, Contact, SmtpConfig, PRESET_TONES, PRESET_LANGUAGES } from ".
 import { SmtpSettings } from "./components/SmtpSettings";
 import { SupabaseConsole } from "./components/SupabaseConsole";
 import { RichTextEditor } from "./components/RichTextEditor";
+import { ContactsManager } from "./components/ContactsManager";
 import {
   Mail,
   Users,
@@ -287,7 +288,7 @@ export default function App() {
   };
 
   // Tabs / switch states
-  const [activeTab, setActiveTab] = useState<"campaigns" | "smtp" | "newCampaign" | "supabase">("campaigns");
+  const [activeTab, setActiveTab] = useState<"campaigns" | "smtp" | "newCampaign" | "supabase" | "contacts">("campaigns");
   const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile">("desktop");
   const [previewContactIndex, setPreviewContactIndex] = useState(0);
   const [isAiConfigured, setIsAiConfigured] = useState(true);
@@ -690,6 +691,29 @@ export default function App() {
     setParseError(null);
   };
 
+  const loadDatabaseContacts = async () => {
+    try {
+      const response = await fetch(getApiUrl("/api/contacts"));
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        const activeList = data.filter((c: any) => c.status !== "bounced");
+        if (activeList.length === 0) {
+          alert("Danh bạ trung tâm hiện chưa có liên hệ nào hoạt động! Vui lòng vào tab '👤 Quản lý danh bạ' để nhập danh sách.");
+          return;
+        }
+        setRawContactsText(JSON.stringify(activeList.map((c: any) => ({
+          name: c.name,
+          email: c.email,
+          company: c.company,
+          customFields: c.customFields
+        })), null, 2));
+        alert(`✓ Đã nạp thành công ${activeList.length} liên hệ hoạt động tốt từ Danh bạ Trung tâm! (Đã tự động loại bỏ ${data.length - activeList.length} email chết bị bounced)`);
+      }
+    } catch (err: any) {
+      alert("Không thể kết nối lấy danh bạ: " + err.message);
+    }
+  };
+
   const handleUpdateSmtpConfig = (newConfig: SmtpConfig | null) => {
     setSmtpConfig(newConfig);
     try {
@@ -811,6 +835,16 @@ export default function App() {
             }`}
           >
             💡 Soạn thảo bằng AI
+          </button>
+          <button
+            onClick={() => setActiveTab("contacts")}
+            className={`px-3 py-2 rounded-lg transition-colors ${
+              activeTab === "contacts"
+                ? "text-indigo-600 bg-indigo-50"
+                : "text-slate-600 hover:text-indigo-600 hover:bg-slate-100"
+            }`}
+          >
+            👤 Quản lý danh bạ
           </button>
           <button
             onClick={() => setActiveTab("smtp")}
@@ -1617,15 +1651,24 @@ export default function App() {
                         </div>
                       ) : (
                         <div>
-                          <div className="flex justify-between items-center mb-1.5">
+                          <div className="flex justify-between items-center mb-1.5 flex-wrap gap-2">
                             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Mảng JSON danh bạ</span>
-                            <button
-                              type="button"
-                              onClick={loadDemoContacts}
-                              className="text-[10px] text-indigo-600 hover:underline font-bold"
-                            >
-                              Tải danh sách VIP mẫu
-                            </button>
+                            <div className="flex gap-3">
+                              <button
+                                type="button"
+                                onClick={loadDatabaseContacts}
+                                className="text-[10px] text-emerald-600 hover:underline font-black flex items-center gap-0.5"
+                              >
+                                👥 Lấy từ Danh bạ Trung tâm (Đã lọc)
+                              </button>
+                              <button
+                                type="button"
+                                onClick={loadDemoContacts}
+                                className="text-[10px] text-indigo-600 hover:underline font-bold"
+                              >
+                                Tải danh sách VIP mẫu
+                              </button>
+                            </div>
                           </div>
                           <textarea
                             rows={11}
@@ -1762,6 +1805,13 @@ export default function App() {
                 </div>
 
               </form>
+            </div>
+          )}
+
+          {/* TAB 2.5: Contacts Manager Screen */}
+          {activeTab === "contacts" && (
+            <div className="space-y-6">
+              <ContactsManager />
             </div>
           )}
 

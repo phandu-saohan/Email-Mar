@@ -3,7 +3,9 @@ export interface Contact {
   email: string;
   name: string;
   company?: string;
+  status?: "active" | "bounced";
   customFields?: Record<string, string>;
+  createdAt?: string;
 }
 
 export interface SmtpConfig {

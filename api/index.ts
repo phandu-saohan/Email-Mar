@@ -56,6 +56,7 @@ interface SendingLog {
 // In-memory stores
 // ─────────────────────────────────────────────
 const campaigns: Record<string, Campaign> = {};
+const contactsCache: Record<string, Contact> = {};
 const sendingTimers: Record<string, NodeJS.Timeout> = {};
 
 // ─────────────────────────────────────────────
@@ -64,7 +65,9 @@ const sendingTimers: Record<string, NodeJS.Timeout> = {};
 let supabase: any = null;
 let supabaseStatus = {
   isConfigured: false,
-  tableExists: false,
+  tableExists: false, // true if campaigns table exists
+  campaignsExists: false,
+  contactsExists: false,
   message: "Chưa kết nối. Đang kiểm tra cấu hình...",
   error: undefined as string | undefined,
 };
@@ -76,7 +79,7 @@ if (supabaseUrl && supabaseKey) {
   try {
     supabase = createClient(supabaseUrl, supabaseKey, { auth: { persistSession: false } });
     supabaseStatus.isConfigured = true;
-    supabaseStatus.message = "Đã cấu hình Supabase. Đang kiểm tra bảng...";
+    supabaseStatus.message = "Đã cấu hình Supabase. Đang kiểm tra các bảng...";
   } catch (err: any) {
     supabaseStatus.message = "Lỗi khởi tạo Supabase client.";
     supabaseStatus.error = err.message;
@@ -92,7 +95,10 @@ let initPromise: Promise<void> | null = null;
 
 function ensureInitialized(): Promise<void> {
   if (!initPromise) {
-    initPromise = loadCampaignsFromSupabase();
+    initPromise = Promise.all([
+      loadCampaignsFromSupabase(),
+      loadContactsFromSupabase()
+    ]).then(() => {});
   }
   return initPromise;
 }
@@ -103,6 +109,7 @@ async function loadCampaignsFromSupabase() {
     const { data, error } = await supabase.from("campaigns").select("*");
     if (error) {
       if (error.code === "PGRST116" || error.message?.includes("does not exist")) {
+        supabaseStatus.campaignsExists = false;
         supabaseStatus.tableExists = false;
         supabaseStatus.message = "Thiếu bảng 'campaigns'. Hãy chạy SQL khởi tạo.";
       } else {
@@ -111,8 +118,9 @@ async function loadCampaignsFromSupabase() {
       }
       return;
     }
+    supabaseStatus.campaignsExists = true;
     supabaseStatus.tableExists = true;
-    supabaseStatus.message = "Đã đồng bộ dữ liệu từ Supabase!";
+    supabaseStatus.message = "Đã đồng bộ dữ liệu chiến dịch từ Supabase!";
     supabaseStatus.error = undefined;
 
     if (data && Array.isArray(data)) {
@@ -139,6 +147,40 @@ async function loadCampaignsFromSupabase() {
   }
 }
 
+async function loadContactsFromSupabase() {
+  if (!supabase) return;
+  try {
+    const { data, error } = await supabase.from("contacts").select("*");
+    if (error) {
+      if (error.code === "PGRST116" || error.message?.includes("does not exist")) {
+        supabaseStatus.contactsExists = false;
+      }
+      return;
+    }
+    supabaseStatus.contactsExists = true;
+    if (data && Array.isArray(data)) {
+      // Clear current in-memory cache to sync fresh
+      for (const k of Object.keys(contactsCache)) delete contactsCache[k];
+      data.forEach((row: any) => {
+        try {
+          const c: Contact = {
+            id: row.id,
+            email: row.email,
+            name: row.name,
+            company: row.company || "",
+            status: row.status || "active",
+            customFields: typeof row.custom_fields === "string" ? JSON.parse(row.custom_fields) : (row.custom_fields || {}),
+            createdAt: row.created_at || new Date().toISOString(),
+          };
+          contactsCache[c.id] = c;
+        } catch (e) { /* skip bad rows */ }
+      });
+    }
+  } catch (err: any) {
+    console.error("Lỗi khi tải danh bạ từ Supabase:", err.message);
+  }
+}
+
 async function syncCampaignToSupabase(campaign: Campaign) {
   if (!supabase) return;
   try {
@@ -152,8 +194,8 @@ async function syncCampaignToSupabase(campaign: Campaign) {
       logs: campaign.logs, current_index: campaign.currentIndex,
     }, { onConflict: "id" });
     if (!error) {
+      supabaseStatus.campaignsExists = true;
       supabaseStatus.tableExists = true;
-      supabaseStatus.message = "Đồng bộ Supabase thành công!";
       supabaseStatus.error = undefined;
     }
   } catch (err: any) {
@@ -167,6 +209,41 @@ async function deleteCampaignFromSupabase(id: string) {
     await supabase.from("campaigns").delete().eq("id", id);
   } catch (err: any) {
     console.error("[Supabase Delete Error]:", err);
+  }
+}
+
+async function syncContactToSupabase(contact: Contact) {
+  if (!supabase) return;
+  try {
+    await supabase.from("contacts").upsert({
+      id: contact.id,
+      email: contact.email,
+      name: contact.name,
+      company: contact.company || null,
+      status: contact.status || "active",
+      custom_fields: contact.customFields || {},
+      created_at: contact.createdAt || new Date().toISOString()
+    }, { onConflict: "id" });
+  } catch (err: any) {
+    console.error("[Supabase Sync Contact Error]:", err.message);
+  }
+}
+
+async function deleteContactFromSupabase(id: string) {
+  if (!supabase) return;
+  try {
+    await supabase.from("contacts").delete().eq("id", id);
+  } catch (err: any) {
+    console.error("[Supabase Contact Delete Error]:", err);
+  }
+}
+
+async function clearContactsFromSupabase() {
+  if (!supabase) return;
+  try {
+    await supabase.from("contacts").delete().neq("id", "none_to_delete");
+  } catch (err: any) {
+    console.error("[Supabase Clear Contacts Error]:", err);
   }
 }
 
@@ -268,17 +345,24 @@ app.get("/api/gemini/config-check", (req, res) => {
 app.get("/api/supabase/status", async (req, res) => {
   if (supabase) {
     try {
-      const { error } = await supabase.from("campaigns").select("id").limit(1);
-      if (error) {
+      const { error: errorCamp } = await supabase.from("campaigns").select("id").limit(1);
+      const { error: errorCont } = await supabase.from("contacts").select("id").limit(1);
+      
+      supabaseStatus.campaignsExists = !errorCamp;
+      supabaseStatus.contactsExists = !errorCont;
+      
+      if (errorCamp || errorCont) {
         supabaseStatus.tableExists = false;
-        supabaseStatus.error = error.message;
-        supabaseStatus.message = error.message?.includes("does not exist")
-          ? "Thiếu bảng 'campaigns'. Chạy SQL khởi tạo."
-          : "Lỗi: " + error.message;
+        const missing = [];
+        if (errorCamp) missing.push("'campaigns'");
+        if (errorCont) missing.push("'contacts'");
+        
+        supabaseStatus.message = `Thiếu bảng ${missing.join(" và ")}. Hãy chạy SQL khởi tạo phía dưới.`;
+        supabaseStatus.error = errorCamp?.message || errorCont?.message;
       } else {
         supabaseStatus.tableExists = true;
         supabaseStatus.error = undefined;
-        supabaseStatus.message = "Kết nối Supabase OK!";
+        supabaseStatus.message = "Đã kết nối và đồng bộ hoàn tất với các bảng 'campaigns' & 'contacts'!";
       }
     } catch (err: any) {
       supabaseStatus.error = err.message;
@@ -288,9 +372,12 @@ app.get("/api/supabase/status", async (req, res) => {
     isConfigured: !!(supabaseUrl && supabaseKey),
     supabaseUrl: supabaseUrl || "",
     tableExists: supabaseStatus.tableExists,
+    campaignsExists: supabaseStatus.campaignsExists,
+    contactsExists: supabaseStatus.contactsExists,
     statusMessage: supabaseStatus.message,
     errorMessage: supabaseStatus.error,
-    schemaSql: `CREATE TABLE IF NOT EXISTS campaigns (
+    schemaSql: `-- 1. Tạo bảng quản lý chiến dịch
+CREATE TABLE IF NOT EXISTS campaigns (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, subject TEXT NOT NULL,
   body TEXT NOT NULL, contacts JSONB NOT NULL, status TEXT NOT NULL,
   sent_count INTEGER DEFAULT 0, open_count INTEGER DEFAULT 0,
@@ -299,7 +386,19 @@ app.get("/api/supabase/status", async (req, res) => {
   scheduled_at TIMESTAMPTZ, smtp_config JSONB, logs JSONB NOT NULL,
   current_index INTEGER DEFAULT 0
 );
-ALTER TABLE campaigns DISABLE ROW LEVEL SECURITY;`
+ALTER TABLE campaigns DISABLE ROW LEVEL SECURITY;
+
+-- 2. Tạo bảng lưu trữ danh bạ khách hàng
+CREATE TABLE IF NOT EXISTS contacts (
+  id TEXT PRIMARY KEY,
+  email TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  company TEXT,
+  status TEXT DEFAULT 'active',
+  custom_fields JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE contacts DISABLE ROW LEVEL SECURITY;`
   });
 });
 
@@ -495,6 +594,15 @@ async function startCampaignSending(id: string): Promise<boolean> {
       campaign.bounceCount++;
       campaign.logs.unshift({ timestamp: new Date().toISOString(), email: contact.email, name: contact.name, status: "failed", message: `Gửi thất bại: ${smtpErr.message}` });
       syncCampaignToSupabase(campaign);
+      
+      // Tự động tìm kiếm trong contactsCache và đánh dấu email chết (bounced)
+      const foundContact = Object.values(contactsCache).find(item => item.email.toLowerCase() === contact.email.toLowerCase());
+      if (foundContact) {
+        foundContact.status = "bounced";
+        if (supabase) {
+          syncContactToSupabase(foundContact).catch(err => console.error("SMTP Bounce sync error:", err));
+        }
+      }
     }
   }, delay);
   sendingTimers[id] = sendInterval;
@@ -562,6 +670,97 @@ app.post("/api/campaigns/:id/update", (req, res) => {
   campaign.logs.unshift({ timestamp: new Date().toISOString(), email: "SYSTEM", name: "Hệ thống", status: "pending", message: "Chiến dịch đã được cập nhật." });
   syncCampaignToSupabase(campaign);
   res.json({ success: true, campaign });
+});
+
+// ─────────────────────────────────────────────
+// Contacts Routes
+// ─────────────────────────────────────────────
+app.get("/api/contacts", (req, res) => {
+  res.json(Object.values(contactsCache).sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")));
+});
+
+app.post("/api/contacts/import", async (req, res) => {
+  const { contacts } = req.body;
+  if (!Array.isArray(contacts)) {
+    return res.status(400).json({ error: "Dữ liệu gửi lên phải là một mảng contacts." });
+  }
+
+  const importedList: Contact[] = [];
+  let duplicateCount = 0;
+  let invalidCount = 0;
+
+  // Regex validate email
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  for (const c of contacts) {
+    if (!c.email || !c.name) {
+      invalidCount++;
+      continue;
+    }
+
+    const email = c.email.trim().toLowerCase();
+    if (!emailRegex.test(email)) {
+      invalidCount++;
+      continue;
+    }
+
+    // Kiểm tra trùng lặp trong danh sách tải lên hiện tại hoặc cache đã có
+    const isDupInPayload = importedList.some(item => item.email.toLowerCase() === email);
+    const existingContact = Object.values(contactsCache).find(item => item.email.toLowerCase() === email);
+
+    if (isDupInPayload) {
+      duplicateCount++;
+      continue;
+    }
+
+    const newContact: Contact = {
+      id: existingContact?.id || c.id || "c_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5),
+      email,
+      name: c.name.trim(),
+      company: c.company?.trim() || "",
+      status: existingContact?.status || c.status || "active",
+      customFields: c.customFields || {},
+      createdAt: existingContact?.createdAt || new Date().toISOString()
+    };
+
+    contactsCache[newContact.id] = newContact;
+    importedList.push(newContact);
+
+    if (supabase) {
+      await syncContactToSupabase(newContact);
+    }
+  }
+
+  res.json({
+    success: true,
+    importedCount: importedList.length,
+    duplicateCount,
+    invalidCount,
+    contacts: Object.values(contactsCache).sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+  });
+});
+
+app.delete("/api/contacts/:id", async (req, res) => {
+  const { id } = req.params;
+  if (contactsCache[id]) {
+    delete contactsCache[id];
+    if (supabase) {
+      await deleteContactFromSupabase(id);
+    }
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ error: "Không tìm thấy contact." });
+  }
+});
+
+app.post("/api/contacts/clear", async (req, res) => {
+  for (const key of Object.keys(contactsCache)) {
+    delete contactsCache[key];
+  }
+  if (supabase) {
+    await clearContactsFromSupabase();
+  }
+  res.json({ success: true });
 });
 
 // Scheduled campaigns checker (runs per serverless instance)
