@@ -466,47 +466,82 @@ export function ContactsManager() {
               </p>
             </div>
           ) : (
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-slate-400 bg-slate-50/50">
-                  <th className="py-3 px-5">Tên khách hàng</th>
-                  <th className="py-3 px-5">Địa chỉ Email</th>
-                  <th className="py-3 px-5">Công ty / Tổ chức</th>
-                  <th className="py-3 px-5 text-center">Trạng thái</th>
-                  <th className="py-3 px-5 text-right">Hành động</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-xs font-semibold text-slate-700">
+              {/* Desktop Table View */}
+              <table className="w-full text-left border-collapse hidden md:table">
+                <thead>
+                  <tr className="border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-slate-400 bg-slate-50/50">
+                    <th className="py-3 px-5">Tên khách hàng</th>
+                    <th className="py-3 px-5">Địa chỉ Email</th>
+                    <th className="py-3 px-5">Công ty / Tổ chức</th>
+                    <th className="py-3 px-5 text-center">Trạng thái</th>
+                    <th className="py-3 px-5 text-right">Hành động</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-xs font-semibold text-slate-700">
+                  {paginatedContacts.map((c) => {
+                    const isBounced = c.status === "bounced";
+                    return (
+                      <tr key={c.id} className="hover:bg-slate-50/50 transition">
+                        <td className="py-3.5 px-5 font-bold text-slate-800">{c.name}</td>
+                        <td className="py-3.5 px-5 font-mono text-[11px] text-slate-600">{c.email}</td>
+                        <td className="py-3.5 px-5 text-slate-500">{c.company || "—"}</td>
+                        <td className="py-3.5 px-5 text-center">
+                          <span className={`inline-flex px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
+                            isBounced 
+                              ? "bg-rose-100 text-rose-800 border border-rose-200" 
+                              : "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                          }`}>
+                            {isBounced ? "✗ BỊ CHẾT (BOUNCED)" : "✓ HOẠT ĐỘNG"}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-5 text-right">
+                          <button
+                            onClick={() => handleDeleteContact(c.id)}
+                            className="p-1.5 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition"
+                            title="Xóa khách hàng"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+
+              {/* Mobile Card-List View */}
+              <div className="md:hidden divide-y divide-slate-100 bg-white">
                 {paginatedContacts.map((c) => {
                   const isBounced = c.status === "bounced";
                   return (
-                    <tr key={c.id} className="hover:bg-slate-50/50 transition">
-                      <td className="py-3.5 px-5 font-bold text-slate-800">{c.name}</td>
-                      <td className="py-3.5 px-5 font-mono text-[11px] text-slate-600">{c.email}</td>
-                      <td className="py-3.5 px-5 text-slate-500">{c.company || "—"}</td>
-                      <td className="py-3.5 px-5 text-center">
-                        <span className={`inline-flex px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
+                    <div key={c.id} className="p-4 flex flex-col gap-2.5 hover:bg-slate-50/30 transition">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <h4 className="font-bold text-sm text-slate-800">{c.name}</h4>
+                          <p className="text-slate-400 text-[10px] mt-0.5">{c.company || "Không có doanh nghiệp"}</p>
+                        </div>
+                        <span className={`inline-flex px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-wider ${
                           isBounced 
                             ? "bg-rose-100 text-rose-800 border border-rose-200" 
                             : "bg-emerald-100 text-emerald-800 border border-emerald-200"
                         }`}>
-                          {isBounced ? "✗ BỊ CHẾT (BOUNCED)" : "✓ HOẠT ĐỘNG"}
+                          {isBounced ? "Bị chết" : "Hoạt động"}
                         </span>
-                      </td>
-                      <td className="py-3.5 px-5 text-right">
+                      </div>
+                      <div className="flex items-center justify-between gap-3 text-xs pt-1 border-t border-dashed border-slate-100">
+                        <span className="font-mono text-[11px] text-slate-650 truncate max-w-[75%]">{c.email}</span>
                         <button
                           onClick={() => handleDeleteContact(c.id)}
-                          className="p-1.5 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition"
+                          className="p-1.5 hover:bg-rose-50 text-rose-500 rounded-lg transition shrink-0 border border-slate-100 hover:border-rose-100"
                           title="Xóa khách hàng"
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <Trash2 className="h-3.5 w-3.5" />
                         </button>
-                      </td>
-                    </tr>
+                      </div>
+                    </div>
                   );
                 })}
-              </tbody>
-            </table>
+              </div>
           )}
         </div>
 
