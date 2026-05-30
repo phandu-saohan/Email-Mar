@@ -277,6 +277,28 @@ async function syncContactToSupabase(contact: Contact) {
   }
 }
 
+async function syncContactsBulkToSupabase(contacts: Contact[]) {
+  if (!supabase || contacts.length === 0) return;
+  try {
+    const payloads = contacts.map(c => ({
+      id: c.id,
+      email: c.email,
+      name: c.name,
+      company: c.company || null,
+      status: c.status || "active",
+      custom_fields: c.customFields || {},
+      created_at: c.createdAt || new Date().toISOString()
+    }));
+
+    const { error } = await supabase.from("contacts").upsert(payloads, { onConflict: "id" });
+    if (error) {
+      console.error("[Supabase Sync Bulk Contacts Error]:", error.message);
+    }
+  } catch (err: any) {
+    console.error("[Supabase Bulk Exception]:", err.message);
+  }
+}
+
 async function deleteContactFromSupabase(id: string) {
   if (!supabase) return;
   try {
@@ -842,10 +864,10 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
 
       contactsCache[newContact.id] = newContact;
       importedList.push(newContact);
+    }
 
-      if (supabase) {
-        await syncContactToSupabase(newContact);
-      }
+    if (supabase && importedList.length > 0) {
+      await syncContactsBulkToSupabase(importedList);
     }
 
     res.json({
