@@ -10,7 +10,9 @@ interface Contact {
   email: string;
   name: string;
   company?: string;
+  status?: string;
   customFields?: Record<string, string>;
+  createdAt?: string;
 }
 
 interface SmtpConfig {
@@ -51,19 +53,24 @@ interface SendingLog {
   message: string;
 }
 
-// In-memory data store for campaigns
+// In-memory data store for campaigns and contacts
 const campaigns: Record<string, Campaign> = {};
+const contactsCache: Record<string, Contact> = {};
 
 // Supabase Connection & Sync Integration Controls
 let supabase: any = null;
 let supabaseStatus: {
   isConfigured: boolean;
   tableExists: boolean;
+  campaignsExists: boolean;
+  contactsExists: boolean;
   message: string;
   error?: string;
 } = {
   isConfigured: false,
   tableExists: false,
+  campaignsExists: false,
+  contactsExists: false,
   message: "Chưa kết nối. Đang kiểm tra cấu hình thiết lập..."
 };
 
@@ -216,6 +223,78 @@ async function deleteCampaignFromSupabase(id: string) {
   }
 }
 
+// Functions to manage and sync contacts in Supabase
+async function loadContactsFromSupabase() {
+  if (!supabase) return;
+  try {
+    console.log("[Supabase] Loading contacts from database...");
+    const { data, error } = await supabase.from("contacts").select("*");
+    if (error) {
+      if (error.code === "PGRST116" || error.message?.includes("does not exist")) {
+        supabaseStatus.contactsExists = false;
+      }
+      return;
+    }
+    supabaseStatus.contactsExists = true;
+    if (data && Array.isArray(data)) {
+      // Sync fresh
+      for (const k of Object.keys(contactsCache)) delete contactsCache[k];
+      data.forEach((row: any) => {
+        try {
+          const c: Contact = {
+            id: row.id,
+            email: row.email,
+            name: row.name,
+            company: row.company || "",
+            status: row.status || "active",
+            customFields: typeof row.custom_fields === "string" ? JSON.parse(row.custom_fields) : (row.custom_fields || {}),
+            createdAt: row.created_at || new Date().toISOString(),
+          };
+          contactsCache[c.id] = c;
+        } catch (e) { /* skip bad rows */ }
+      });
+      console.log(`[Supabase] Loaded ${data.length} contacts cache.`);
+    }
+  } catch (err: any) {
+    console.error("Lỗi khi tải danh bạ từ Supabase:", err.message);
+  }
+}
+
+async function syncContactToSupabase(contact: Contact) {
+  if (!supabase) return;
+  try {
+    await supabase.from("contacts").upsert({
+      id: contact.id,
+      email: contact.email,
+      name: contact.name,
+      company: contact.company || null,
+      status: contact.status || "active",
+      custom_fields: contact.customFields || {},
+      created_at: contact.createdAt || new Date().toISOString()
+    }, { onConflict: "id" });
+  } catch (err: any) {
+    console.error("[Supabase Sync Contact Error]:", err.message);
+  }
+}
+
+async function deleteContactFromSupabase(id: string) {
+  if (!supabase) return;
+  try {
+    await supabase.from("contacts").delete().eq("id", id);
+  } catch (err: any) {
+    console.error("[Supabase Contact Delete Error]:", err);
+  }
+}
+
+async function clearContactsFromSupabase() {
+  if (!supabase) return;
+  try {
+    await supabase.from("contacts").delete().neq("id", "none_to_delete");
+  } catch (err: any) {
+    console.error("[Supabase Clear Contacts Error]:", err);
+  }
+}
+
 // Helper to initialize Gemini Client lazily and safely
 let aiClient: GoogleGenAI | null = null;
 function getGeminiClient() {
@@ -314,27 +393,30 @@ async function startServer() {
 
   // Load initial campaigns state from Supabase when server starts
   await loadCampaignsFromSupabase();
+  await loadContactsFromSupabase();
 
   // API - Get Supabase connection, diagnostic info, and table creation script
   app.get("/api/supabase/status", async (req, res) => {
     if (supabase) {
       try {
-        const { error } = await supabase.from("campaigns").select("id").limit(1);
-        if (error) {
-          if (error.code === "PGRST116" || error.message?.includes("does not exist")) {
-            supabaseStatus.tableExists = false;
-            supabaseStatus.message = "Thiếu bảng 'campaigns'. Chạy mã khởi tạo SQL bên dưới.";
-          } else if (error.message?.includes("row-level security") || error.message?.includes("security policy")) {
-            supabaseStatus.error = error.message;
-            supabaseStatus.message = "Lỗi RLS: Bảng đang bật RLS nhưng thiếu chính sách truy cập hoặc chưa tắt RLS.";
-          } else {
-            supabaseStatus.error = error.message;
-            supabaseStatus.message = "Lỗi kết nối bảng: " + error.message;
-          }
+        const { error: errorCamp } = await supabase.from("campaigns").select("id").limit(1);
+        const { error: errorCont } = await supabase.from("contacts").select("id").limit(1);
+        
+        supabaseStatus.campaignsExists = !errorCamp;
+        supabaseStatus.contactsExists = !errorCont;
+        
+        if (errorCamp || errorCont) {
+          supabaseStatus.tableExists = false;
+          const missing = [];
+          if (errorCamp) missing.push("'campaigns'");
+          if (errorCont) missing.push("'contacts'");
+          
+          supabaseStatus.message = `Thiếu bảng ${missing.join(" và ")}. Hãy chạy SQL khởi tạo phía dưới.`;
+          supabaseStatus.error = errorCamp?.message || errorCont?.message;
         } else {
           supabaseStatus.tableExists = true;
           supabaseStatus.error = undefined;
-          supabaseStatus.message = "Đã đồng bộ hóa lưu trữ trường dữ liệu trực tuyến!";
+          supabaseStatus.message = "Đã kết nối và đồng bộ hoàn tất với các bảng 'campaigns' & 'contacts'!";
         }
       } catch (err: any) {
         supabaseStatus.error = err.message;
@@ -346,41 +428,40 @@ async function startServer() {
       isConfigured: !!((process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL) && (process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY)),
       supabaseUrl: process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "",
       tableExists: supabaseStatus.tableExists,
+      campaignsExists: supabaseStatus.campaignsExists,
+      contactsExists: supabaseStatus.contactsExists,
       statusMessage: supabaseStatus.message,
       errorMessage: supabaseStatus.error,
-      schemaSql: `CREATE TABLE IF NOT EXISTS campaigns (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  subject TEXT NOT NULL,
-  body TEXT NOT NULL,
-  contacts JSONB NOT NULL,
-  status TEXT NOT NULL,
-  sent_count INTEGER DEFAULT 0,
-  open_count INTEGER DEFAULT 0,
-  click_count INTEGER DEFAULT 0,
-  bounce_count INTEGER DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  sent_at TIMESTAMPTZ,
-  scheduled_at TIMESTAMPTZ,
-  smtp_config JSONB,
-  logs JSONB NOT NULL,
+      schemaSql: `-- 1. Tạo bảng quản lý chiến dịch
+CREATE TABLE IF NOT EXISTS campaigns (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, subject TEXT NOT NULL,
+  body TEXT NOT NULL, contacts JSONB NOT NULL, status TEXT NOT NULL,
+  sent_count INTEGER DEFAULT 0, open_count INTEGER DEFAULT 0,
+  click_count INTEGER DEFAULT 0, bounce_count INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(), sent_at TIMESTAMPTZ,
+  scheduled_at TIMESTAMPTZ, smtp_config JSONB, logs JSONB NOT NULL,
   current_index INTEGER DEFAULT 0
 );
-
--- Tắt chế độ bảo mật Row Level Security (RLS) để cho phép Node.js API đọc/ghi (Khuyên dùng và nhanh nhất)
 ALTER TABLE campaigns DISABLE ROW LEVEL SECURITY;
 
--- HOẶC nếu bạn muốn bật RLS, hãy chạy thêm chính sách Policy này để cho phép truy cập qua api key anon:
--- CREATE POLICY "Allow full access to campaigns" ON campaigns FOR ALL USING (true) WITH CHECK (true);
-
--- Kích hoạt real-time cơ sở dữ liệu (Tùy chọn)
--- ALTER PUBLICATION supabase_realtime ADD TABLE campaigns;`
+-- 2. Tạo bảng lưu trữ danh bạ khách hàng
+CREATE TABLE IF NOT EXISTS contacts (
+  id TEXT PRIMARY KEY,
+  email TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  company TEXT,
+  status TEXT DEFAULT 'active',
+  custom_fields JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE contacts DISABLE ROW LEVEL SECURITY;`
     });
   });
 
   // API - Manually trigger database sync refresh
   app.post("/api/supabase/refresh", async (req, res) => {
     await loadCampaignsFromSupabase();
+    await loadContactsFromSupabase();
     res.json({
       success: true,
       tableExists: supabaseStatus.tableExists,
@@ -705,6 +786,100 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
       console.error("Gemini Generation Error:", error);
       res.status(500).json({ error: error.message || "Lỗi tạo nội dung bằng AI" });
     }
+  });
+
+  // ─────────────────────────────────────────────
+  // Contacts Routes
+  // ─────────────────────────────────────────────
+  
+  // API - Get contacts list
+  app.get("/api/contacts", (req, res) => {
+    res.json(Object.values(contactsCache).sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")));
+  });
+
+  // API - Import contacts list
+  app.post("/api/contacts/import", async (req, res) => {
+    const { contacts } = req.body;
+    if (!Array.isArray(contacts)) {
+      return res.status(400).json({ error: "Dữ liệu gửi lên phải là một mảng contacts." });
+    }
+
+    const importedList: Contact[] = [];
+    let duplicateCount = 0;
+    let invalidCount = 0;
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    for (const c of contacts) {
+      if (!c.email || !c.name) {
+        invalidCount++;
+        continue;
+      }
+
+      const email = c.email.trim().toLowerCase();
+      if (!emailRegex.test(email)) {
+        invalidCount++;
+        continue;
+      }
+
+      const isDupInPayload = importedList.some(item => item.email.toLowerCase() === email);
+      const existingContact = Object.values(contactsCache).find(item => item.email.toLowerCase() === email);
+
+      if (isDupInPayload) {
+        duplicateCount++;
+        continue;
+      }
+
+      const newContact: Contact = {
+        id: existingContact?.id || c.id || "c_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5),
+        email,
+        name: c.name.trim(),
+        company: c.company?.trim() || "",
+        status: existingContact?.status || c.status || "active",
+        customFields: c.customFields || {},
+        createdAt: existingContact?.createdAt || new Date().toISOString()
+      };
+
+      contactsCache[newContact.id] = newContact;
+      importedList.push(newContact);
+
+      if (supabase) {
+        await syncContactToSupabase(newContact);
+      }
+    }
+
+    res.json({
+      success: true,
+      importedCount: importedList.length,
+      duplicateCount,
+      invalidCount,
+      contacts: Object.values(contactsCache).sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+    });
+  });
+
+  // API - Delete contact
+  app.delete("/api/contacts/:id", async (req, res) => {
+    const { id } = req.params;
+    if (contactsCache[id]) {
+      delete contactsCache[id];
+      if (supabase) {
+        await deleteContactFromSupabase(id);
+      }
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: "Không tìm thấy contact." });
+    }
+  });
+
+  // API - Clear all contacts
+  app.post("/api/contacts/clear", async (req, res) => {
+    for (const key of Object.keys(contactsCache)) {
+      delete contactsCache[key];
+    }
+    if (supabase) {
+      await clearContactsFromSupabase();
+    }
+    res.json({ success: true });
   });
 
   // API - Get campaigns list
@@ -1050,6 +1225,15 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
             message: `Gửi email thất bại: ${friendlyError}`,
           });
           syncCampaignToSupabase(campaign);
+
+          // Tự động tìm kiếm trong contactsCache và đánh dấu email chết (bounced)
+          const foundContact = Object.values(contactsCache).find(item => item.email.toLowerCase() === contact.email.toLowerCase());
+          if (foundContact) {
+            foundContact.status = "bounced";
+            if (supabase) {
+              syncContactToSupabase(foundContact).catch(err => console.error("SMTP Bounce sync error:", err));
+            }
+          }
         }
       }
     }, delay);
