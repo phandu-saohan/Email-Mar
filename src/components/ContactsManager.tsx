@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   Upload,
+  Download,
   X,
   ChevronLeft,
   ChevronRight,
@@ -86,6 +87,51 @@ export function ContactsManager() {
     } catch (e) {
       alert("Lỗi khi dọn dẹp danh bạ: " + e);
     }
+  };
+
+  const handleDownloadContacts = () => {
+    if (contacts.length === 0) {
+      alert("Danh bạ hiện tại đang trống, không có dữ liệu để tải xuống!");
+      return;
+    }
+
+    // Trích xuất các trường tùy biến (custom fields) động từ toàn bộ danh bạ
+    const customKeysSet = new Set<string>();
+    contacts.forEach(c => {
+      if (c.customFields) {
+        Object.keys(c.customFields).forEach(k => customKeysSet.add(k));
+      }
+    });
+    const customKeys = Array.from(customKeysSet);
+
+    // Xây dựng dòng tiêu đề cột
+    const headers = ["Họ Tên", "Email", "Công Ty", "Trạng Thái", ...customKeys];
+    
+    // Xây dựng nội dung các dòng dữ liệu
+    const rows = contacts.map(c => {
+      const row = [
+        c.name,
+        c.email,
+        c.company || "",
+        c.status === "bounced" ? "Bị chết (Bounced)" : "Hoạt động (Active)"
+      ];
+      customKeys.forEach(k => {
+        row.push(c.customFields?.[k] || "");
+      });
+      // Bọc các trường dữ liệu bằng dấu ngoặc kép để tránh lỗi dấu phẩy và ký tự xuống dòng
+      return row.map(val => `"${val.replace(/"/g, '""')}"`).join(",");
+    });
+
+    // Thêm UTF-8 BOM (\ufeff) để Excel hiển thị tiếng Việt có dấu chuẩn xác 100%
+    const csvContent = "\ufeff" + [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `danh_ba_email_marketing_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   // CSV Parser
@@ -386,13 +432,22 @@ export function ContactsManager() {
               <span>Tải danh sách lên (CSV/Excel)</span>
             </button>
             {contacts.length > 0 && (
-              <button
-                onClick={handleClearAll}
-                className="inline-flex items-center gap-1.5 px-3 py-2 border border-slate-200 bg-white hover:bg-rose-50 text-rose-600 text-xs font-bold rounded-xl transition"
-              >
-                <Trash2 className="h-4 w-4" />
-                <span>Xóa sạch danh bạ</span>
-              </button>
+              <>
+                <button
+                  onClick={handleDownloadContacts}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 border border-emerald-250 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold rounded-xl transition shadow-sm"
+                >
+                  <Download className="h-4 w-4" />
+                  <span>Tải danh bạ xuống (CSV)</span>
+                </button>
+                <button
+                  onClick={handleClearAll}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 border border-slate-200 bg-white hover:bg-rose-50 text-rose-600 text-xs font-bold rounded-xl transition"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  <span>Xóa sạch danh bạ</span>
+                </button>
+              </>
             )}
           </div>
         </div>
