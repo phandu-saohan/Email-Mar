@@ -129,7 +129,21 @@ export default function App() {
   const [isSendingTestEmail, setIsSendingTestEmail] = useState(false);
 
   // CSV Import related structures
-  const [importMethod, setImportMethod] = useState<"csv" | "json">("csv");
+  const [importMethod, setImportMethod] = useState<"csv" | "json" | "database">("database");
+  const [dbContactsCount, setDbContactsCount] = useState<number | null>(null);
+
+  const fetchDbContactsCount = async () => {
+    try {
+      const response = await fetch(getApiUrl("/api/contacts"));
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        const activeCount = data.filter((c: any) => c.status !== "bounced").length;
+        setDbContactsCount(activeCount);
+      }
+    } catch (e) {
+      console.error("Lỗi tải số lượng danh bạ từ máy chủ:", e);
+    }
+  };
   const [csvFileName, setCsvFileName] = useState<string | null>(null);
   const [csvFeedback, setCsvFeedback] = useState<{ count: number; columns: string[] } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -318,6 +332,7 @@ export default function App() {
   useEffect(() => {
     fetchCampaigns();
     checkAiKeyStatus();
+    fetchDbContactsCount();
     
     // Auto refresh status of campaigns every 2 seconds
     timerRef.current = setInterval(() => {
@@ -423,28 +438,54 @@ export default function App() {
     setParseError(null);
 
     let finalContacts: Contact[] = [];
-    try {
-      const parsed = JSON.parse(rawContactsText);
-      if (!Array.isArray(parsed)) {
-        throw new Error("Dữ liệu nhập vào phải là một mảng [] chứa các đối tượng khách hàng.");
-      }
-      
-      // Ensure validity of contacts
-      finalContacts = parsed.map((item, idx) => {
-        if (!item.email || !item.name) {
-          throw new Error(`Khách hàng dòng thứ ${idx+1} thiếu các trường tối thiểu 'name' hoặc 'email'.`);
+    if (importMethod === "database") {
+      try {
+        const response = await fetch(getApiUrl("/api/contacts"));
+        const data = await response.json();
+        if (Array.isArray(data)) {
+          const activeList = data.filter((c: any) => c.status !== "bounced");
+          if (activeList.length === 0) {
+            setParseError("Danh bạ trung tâm hiện chưa có liên hệ nào hoạt động! Vui lòng vào tab '👤 Quản lý danh bạ' để nhập danh sách.");
+            return;
+          }
+          finalContacts = activeList.map((c: any) => ({
+            id: c.id,
+            name: c.name,
+            email: c.email,
+            company: c.company || "",
+            customFields: c.customFields || {}
+          }));
+        } else {
+          throw new Error("Không thể tải danh sách liên hệ từ máy chủ.");
         }
-        return {
-          id: item.id || `c_imported_${idx}_${Date.now()}`,
-          name: item.name,
-          email: item.email,
-          company: item.company || "Quý khách",
-          customFields: item.customFields || {}
-        };
-      });
-    } catch (err: any) {
-      setParseError(err.message || "Định dạng JSON không hợp lệ. Vui lòng kiểm tra lại dấu ngoặc và phẩy.");
-      return;
+      } catch (err: any) {
+        setParseError("Không thể tải danh bạ trung tâm: " + err.message);
+        return;
+      }
+    } else {
+      try {
+        const parsed = JSON.parse(rawContactsText);
+        if (!Array.isArray(parsed)) {
+          throw new Error("Dữ liệu nhập vào phải là một mảng [] chứa các đối tượng khách hàng.");
+        }
+        
+        // Ensure validity of contacts
+        finalContacts = parsed.map((item, idx) => {
+          if (!item.email || !item.name) {
+            throw new Error(`Khách hàng dòng thứ ${idx+1} thiếu các trường tối thiểu 'name' hoặc 'email'.`);
+          }
+          return {
+            id: item.id || `c_imported_${idx}_${Date.now()}`,
+            name: item.name,
+            email: item.email,
+            company: item.company || "Quý khách",
+            customFields: item.customFields || {}
+          };
+        });
+      } catch (err: any) {
+        setParseError(err.message || "Định dạng JSON không hợp lệ. Vui lòng kiểm tra lại dấu ngoặc và phẩy.");
+        return;
+      }
     }
 
     if (finalContacts.length === 0) {
@@ -776,6 +817,8 @@ export default function App() {
     setAiAlertMessage(null);
     setIsScheduled(false);
     setParseError(null);
+    setImportMethod("database");
+    fetchDbContactsCount();
     setActiveTab("newCampaign");
   };
 
@@ -2111,6 +2154,20 @@ export default function App() {
                       <div className="flex bg-slate-100 p-1 rounded-xl">
                         <button
                           type="button"
+                          onClick={() => {
+                            setImportMethod("database");
+                            fetchDbContactsCount();
+                          }}
+                          className={`flex-1 text-center py-1.5 text-xs font-bold rounded-lg transition-all ${
+                            importMethod === "database"
+                              ? "bg-white text-indigo-650 shadow-sm border border-slate-200/30"
+                              : "text-slate-500 hover:text-slate-800"
+                          }`}
+                        >
+                          👥 Lấy từ Danh bạ (Live)
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => setImportMethod("csv")}
                           className={`flex-1 text-center py-1.5 text-xs font-bold rounded-lg transition-all ${
                             importMethod === "csv"
@@ -2133,7 +2190,45 @@ export default function App() {
                         </button>
                       </div>
 
-                      {importMethod === "csv" ? (
+                      {importMethod === "database" ? (
+                        <div className="p-5 bg-emerald-50/50 border border-emerald-100 rounded-2xl space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-emerald-800 flex items-center gap-1.5">
+                              <span className="relative flex h-2 w-2">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                              </span>
+                              Đã kết nối Danh bạ Trung tâm
+                            </span>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                setDbContactsCount(null);
+                                await fetchDbContactsCount();
+                              }}
+                              className="text-[10px] text-indigo-600 hover:underline font-bold"
+                            >
+                              Đồng bộ lại ↺
+                            </button>
+                          </div>
+                          <p className="text-xs text-slate-550 leading-relaxed">
+                            Hệ thống sẽ **tự động lấy toàn bộ danh bạ khách hàng hoạt động tốt** hiện tại từ cơ sở dữ liệu để gửi thư hàng loạt. Các email hỏng (bounced) đã bị loại bỏ tự động.
+                          </p>
+                          <div className="bg-white p-3.5 rounded-xl border border-slate-100 flex items-center justify-between">
+                            <div>
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Người nhận khả dụng</span>
+                              <span className="text-lg font-black text-slate-800 mt-0.5">
+                                {dbContactsCount !== null ? `${dbContactsCount} liên hệ hoạt động` : "Đang kiểm tra..."}
+                              </span>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-[10px] font-black bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full uppercase">
+                                Supabase Live
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      ) : importMethod === "csv" ? (
                         <div className="space-y-3">
                           {/* File drag and drop visual container */}
                           <div
