@@ -11,7 +11,9 @@ interface Contact {
   email: string;
   name: string;
   company?: string;
+  status?: string;
   customFields?: Record<string, string>;
+  createdAt?: string;
 }
 
 interface SmtpConfig {
