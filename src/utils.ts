@@ -1,22 +1,19 @@
 export function getApiUrl(path: string): string {
   try {
-    // Allow manual override via localStorage (for custom backend deployments)
     const customUrl = localStorage.getItem("api_backend_url");
     if (customUrl && customUrl.trim()) {
-      const trimmedUrl = customUrl.trim();
-      // Tự động dọn dẹp URL Cloud Run cũ bị lỗi CORS để chuyển hướng về Vercel API
-      if (trimmedUrl.includes("asia-southeast1.run.app") || trimmedUrl.includes("kfmstvnejouesdbyvqhy37")) {
-        localStorage.removeItem("api_backend_url");
-      } else {
-        const origin = trimmedUrl.replace(/\/$/, "");
-        return `${origin}${path}`;
-      }
+      const origin = customUrl.trim().replace(/\/$/, "");
+      return `${origin}${path}`;
+    }
+    
+    // Auto-detect Vercel deployment and default to the Cloud Run backend URL
+    if (typeof window !== "undefined" && window.location.hostname.includes("vercel.app")) {
+      const fallbackBackend = "https://ais-pre-kfmstvnejouesdbyvqhy37-329591203279.asia-southeast1.run.app";
+      return `${fallbackBackend}${path}`;
     }
   } catch (e) {
     console.warn("Lỗi đọc api_backend_url từ localStorage:", e);
   }
-  // On Vercel: frontend & backend share the same domain → use relative path (no CORS)
-  // On local dev: vite proxy or same Express server → relative path also works
   return path;
 }
 

@@ -1,6 +1,3 @@
-import dotenv from "dotenv";
-dotenv.config();
-
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
@@ -13,12 +10,12 @@ interface Contact {
   email: string;
   name: string;
   company?: string;
-  status?: string;
   customFields?: Record<string, string>;
-  createdAt?: string;
 }
 
 interface SmtpConfig {
+  provider?: "smtp" | "resend";
+  resendApiKey?: string;
   host: string;
   port: number;
   secure: boolean;
@@ -56,24 +53,19 @@ interface SendingLog {
   message: string;
 }
 
-// In-memory data store for campaigns and contacts
+// In-memory data store for campaigns
 const campaigns: Record<string, Campaign> = {};
-const contactsCache: Record<string, Contact> = {};
 
 // Supabase Connection & Sync Integration Controls
 let supabase: any = null;
 let supabaseStatus: {
   isConfigured: boolean;
   tableExists: boolean;
-  campaignsExists: boolean;
-  contactsExists: boolean;
   message: string;
   error?: string;
 } = {
   isConfigured: false,
   tableExists: false,
-  campaignsExists: false,
-  contactsExists: false,
   message: "Chưa kết nối. Đang kiểm tra cấu hình thiết lập..."
 };
 
@@ -226,100 +218,6 @@ async function deleteCampaignFromSupabase(id: string) {
   }
 }
 
-// Functions to manage and sync contacts in Supabase
-async function loadContactsFromSupabase() {
-  if (!supabase) return;
-  try {
-    console.log("[Supabase] Loading contacts from database...");
-    const { data, error } = await supabase.from("contacts").select("*");
-    if (error) {
-      if (error.code === "PGRST116" || error.message?.includes("does not exist")) {
-        supabaseStatus.contactsExists = false;
-      }
-      return;
-    }
-    supabaseStatus.contactsExists = true;
-    if (data && Array.isArray(data)) {
-      // Sync fresh
-      for (const k of Object.keys(contactsCache)) delete contactsCache[k];
-      data.forEach((row: any) => {
-        try {
-          const c: Contact = {
-            id: row.id,
-            email: row.email,
-            name: row.name,
-            company: row.company || "",
-            status: row.status || "active",
-            customFields: typeof row.custom_fields === "string" ? JSON.parse(row.custom_fields) : (row.custom_fields || {}),
-            createdAt: row.created_at || new Date().toISOString(),
-          };
-          contactsCache[c.id] = c;
-        } catch (e) { /* skip bad rows */ }
-      });
-      console.log(`[Supabase] Loaded ${data.length} contacts cache.`);
-    }
-  } catch (err: any) {
-    console.error("Lỗi khi tải danh bạ từ Supabase:", err.message);
-  }
-}
-
-async function syncContactToSupabase(contact: Contact) {
-  if (!supabase) return;
-  try {
-    await supabase.from("contacts").upsert({
-      id: contact.id,
-      email: contact.email,
-      name: contact.name,
-      company: contact.company || null,
-      status: contact.status || "active",
-      custom_fields: contact.customFields || {},
-      created_at: contact.createdAt || new Date().toISOString()
-    }, { onConflict: "id" });
-  } catch (err: any) {
-    console.error("[Supabase Sync Contact Error]:", err.message);
-  }
-}
-
-async function syncContactsBulkToSupabase(contacts: Contact[]) {
-  if (!supabase || contacts.length === 0) return;
-  try {
-    const payloads = contacts.map(c => ({
-      id: c.id,
-      email: c.email,
-      name: c.name,
-      company: c.company || null,
-      status: c.status || "active",
-      custom_fields: c.customFields || {},
-      created_at: c.createdAt || new Date().toISOString()
-    }));
-
-    const { error } = await supabase.from("contacts").upsert(payloads, { onConflict: "id" });
-    if (error) {
-      console.error("[Supabase Sync Bulk Contacts Error]:", error.message);
-    }
-  } catch (err: any) {
-    console.error("[Supabase Bulk Exception]:", err.message);
-  }
-}
-
-async function deleteContactFromSupabase(id: string) {
-  if (!supabase) return;
-  try {
-    await supabase.from("contacts").delete().eq("id", id);
-  } catch (err: any) {
-    console.error("[Supabase Contact Delete Error]:", err);
-  }
-}
-
-async function clearContactsFromSupabase() {
-  if (!supabase) return;
-  try {
-    await supabase.from("contacts").delete().neq("id", "none_to_delete");
-  } catch (err: any) {
-    console.error("[Supabase Clear Contacts Error]:", err);
-  }
-}
-
 // Helper to initialize Gemini Client lazily and safely
 let aiClient: GoogleGenAI | null = null;
 function getGeminiClient() {
@@ -365,52 +263,23 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // ─── CORS: Always inject headers on EVERY response (including 404 / 500 errors) ───
-  // This is critical when frontend (Vercel) calls backend (Cloud Run) cross-origin.
-  const ALLOWED_ORIGINS = [
-    "https://email-mar.vercel.app",
-    "https://email-mar-git-main-phandu-saohan.vercel.app",
-    "http://localhost:3000",
-    "http://localhost:5173",
-  ];
-
-  // Helper to inject CORS headers unconditionally
-  const injectCorsHeaders = (req: express.Request, res: express.Response) => {
-    const origin = req.headers.origin as string | undefined;
-    if (origin && ALLOWED_ORIGINS.includes(origin)) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-    } else if (origin) {
-      // Allow any origin not in the explicit list (dev / staging environments)
+  // Custom CORS middleware to support external deployments like Vercel with Cloud Run backend
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin) {
       res.setHeader("Access-Control-Allow-Origin", origin);
     } else {
       res.setHeader("Access-Control-Allow-Origin", "*");
     }
     res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS, PATCH");
-    res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma, X-Api-Key");
+    res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma");
     res.setHeader("Access-Control-Allow-Credentials", "true");
-    res.setHeader("Access-Control-Max-Age", "86400");
-    res.setHeader("Vary", "Origin");
-  };
-
-  // Middleware 1: Set CORS headers on every incoming request
-  app.use((req, res, next) => {
-    injectCorsHeaders(req, res);
-    // Handle preflight OPTIONS immediately — must reply 204 (no content) with headers
+    res.setHeader("Access-Control-Max-Age", "86400"); // Cache preflight for 24 hours
+    
     if (req.method === "OPTIONS") {
-      res.status(204).end();
+      res.sendStatus(200);
       return;
     }
-    next();
-  });
-
-  // Middleware 2: Re-inject CORS on any response that Express emits AFTER routing
-  // This covers 404 / unhandled route errors where the middleware above has already run.
-  app.use((req, res, next) => {
-    const originalWriteHead = res.writeHead.bind(res);
-    (res as any).writeHead = function (statusCode: number, ...args: any[]) {
-      injectCorsHeaders(req, res);
-      return originalWriteHead(statusCode, ...args);
-    };
     next();
   });
 
@@ -418,30 +287,27 @@ async function startServer() {
 
   // Load initial campaigns state from Supabase when server starts
   await loadCampaignsFromSupabase();
-  await loadContactsFromSupabase();
 
   // API - Get Supabase connection, diagnostic info, and table creation script
   app.get("/api/supabase/status", async (req, res) => {
     if (supabase) {
       try {
-        const { error: errorCamp } = await supabase.from("campaigns").select("id").limit(1);
-        const { error: errorCont } = await supabase.from("contacts").select("id").limit(1);
-        
-        supabaseStatus.campaignsExists = !errorCamp;
-        supabaseStatus.contactsExists = !errorCont;
-        
-        if (errorCamp || errorCont) {
-          supabaseStatus.tableExists = false;
-          const missing = [];
-          if (errorCamp) missing.push("'campaigns'");
-          if (errorCont) missing.push("'contacts'");
-          
-          supabaseStatus.message = `Thiếu bảng ${missing.join(" và ")}. Hãy chạy SQL khởi tạo phía dưới.`;
-          supabaseStatus.error = errorCamp?.message || errorCont?.message;
+        const { error } = await supabase.from("campaigns").select("id").limit(1);
+        if (error) {
+          if (error.code === "PGRST116" || error.message?.includes("does not exist")) {
+            supabaseStatus.tableExists = false;
+            supabaseStatus.message = "Thiếu bảng 'campaigns'. Chạy mã khởi tạo SQL bên dưới.";
+          } else if (error.message?.includes("row-level security") || error.message?.includes("security policy")) {
+            supabaseStatus.error = error.message;
+            supabaseStatus.message = "Lỗi RLS: Bảng đang bật RLS nhưng thiếu chính sách truy cập hoặc chưa tắt RLS.";
+          } else {
+            supabaseStatus.error = error.message;
+            supabaseStatus.message = "Lỗi kết nối bảng: " + error.message;
+          }
         } else {
           supabaseStatus.tableExists = true;
           supabaseStatus.error = undefined;
-          supabaseStatus.message = "Đã kết nối và đồng bộ hoàn tất với các bảng 'campaigns' & 'contacts'!";
+          supabaseStatus.message = "Đã đồng bộ hóa lưu trữ trường dữ liệu trực tuyến!";
         }
       } catch (err: any) {
         supabaseStatus.error = err.message;
@@ -453,40 +319,41 @@ async function startServer() {
       isConfigured: !!((process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL) && (process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY)),
       supabaseUrl: process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "",
       tableExists: supabaseStatus.tableExists,
-      campaignsExists: supabaseStatus.campaignsExists,
-      contactsExists: supabaseStatus.contactsExists,
       statusMessage: supabaseStatus.message,
       errorMessage: supabaseStatus.error,
-      schemaSql: `-- 1. Tạo bảng quản lý chiến dịch
-CREATE TABLE IF NOT EXISTS campaigns (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, subject TEXT NOT NULL,
-  body TEXT NOT NULL, contacts JSONB NOT NULL, status TEXT NOT NULL,
-  sent_count INTEGER DEFAULT 0, open_count INTEGER DEFAULT 0,
-  click_count INTEGER DEFAULT 0, bounce_count INTEGER DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW(), sent_at TIMESTAMPTZ,
-  scheduled_at TIMESTAMPTZ, smtp_config JSONB, logs JSONB NOT NULL,
+      schemaSql: `CREATE TABLE IF NOT EXISTS campaigns (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  body TEXT NOT NULL,
+  contacts JSONB NOT NULL,
+  status TEXT NOT NULL,
+  sent_count INTEGER DEFAULT 0,
+  open_count INTEGER DEFAULT 0,
+  click_count INTEGER DEFAULT 0,
+  bounce_count INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  sent_at TIMESTAMPTZ,
+  scheduled_at TIMESTAMPTZ,
+  smtp_config JSONB,
+  logs JSONB NOT NULL,
   current_index INTEGER DEFAULT 0
 );
+
+-- Tắt chế độ bảo mật Row Level Security (RLS) để cho phép Node.js API đọc/ghi (Khuyên dùng và nhanh nhất)
 ALTER TABLE campaigns DISABLE ROW LEVEL SECURITY;
 
--- 2. Tạo bảng lưu trữ danh bạ khách hàng
-CREATE TABLE IF NOT EXISTS contacts (
-  id TEXT PRIMARY KEY,
-  email TEXT UNIQUE NOT NULL,
-  name TEXT NOT NULL,
-  company TEXT,
-  status TEXT DEFAULT 'active',
-  custom_fields JSONB DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-ALTER TABLE contacts DISABLE ROW LEVEL SECURITY;`
+-- HOẶC nếu bạn muốn bật RLS, hãy chạy thêm chính sách Policy này để cho phép truy cập qua api key anon:
+-- CREATE POLICY "Allow full access to campaigns" ON campaigns FOR ALL USING (true) WITH CHECK (true);
+
+-- Kích hoạt real-time cơ sở dữ liệu (Tùy chọn)
+-- ALTER PUBLICATION supabase_realtime ADD TABLE campaigns;`
     });
   });
 
   // API - Manually trigger database sync refresh
   app.post("/api/supabase/refresh", async (req, res) => {
     await loadCampaignsFromSupabase();
-    await loadContactsFromSupabase();
     res.json({
       success: true,
       tableExists: supabaseStatus.tableExists,
@@ -813,100 +680,6 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
     }
   });
 
-  // ─────────────────────────────────────────────
-  // Contacts Routes
-  // ─────────────────────────────────────────────
-  
-  // API - Get contacts list
-  app.get("/api/contacts", (req, res) => {
-    res.json(Object.values(contactsCache).sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")));
-  });
-
-  // API - Import contacts list
-  app.post("/api/contacts/import", async (req, res) => {
-    const { contacts } = req.body;
-    if (!Array.isArray(contacts)) {
-      return res.status(400).json({ error: "Dữ liệu gửi lên phải là một mảng contacts." });
-    }
-
-    const importedList: Contact[] = [];
-    let duplicateCount = 0;
-    let invalidCount = 0;
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    for (const c of contacts) {
-      if (!c.email || !c.name) {
-        invalidCount++;
-        continue;
-      }
-
-      const email = c.email.trim().toLowerCase();
-      if (!emailRegex.test(email)) {
-        invalidCount++;
-        continue;
-      }
-
-      const isDupInPayload = importedList.some(item => item.email.toLowerCase() === email);
-      const existingContact = Object.values(contactsCache).find(item => item.email.toLowerCase() === email);
-
-      if (isDupInPayload) {
-        duplicateCount++;
-        continue;
-      }
-
-      const newContact: Contact = {
-        id: existingContact?.id || c.id || "c_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5),
-        email,
-        name: c.name.trim(),
-        company: c.company?.trim() || "",
-        status: existingContact?.status || c.status || "active",
-        customFields: c.customFields || {},
-        createdAt: existingContact?.createdAt || new Date().toISOString()
-      };
-
-      contactsCache[newContact.id] = newContact;
-      importedList.push(newContact);
-    }
-
-    if (supabase && importedList.length > 0) {
-      await syncContactsBulkToSupabase(importedList);
-    }
-
-    res.json({
-      success: true,
-      importedCount: importedList.length,
-      duplicateCount,
-      invalidCount,
-      contacts: Object.values(contactsCache).sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
-    });
-  });
-
-  // API - Delete contact
-  app.delete("/api/contacts/:id", async (req, res) => {
-    const { id } = req.params;
-    if (contactsCache[id]) {
-      delete contactsCache[id];
-      if (supabase) {
-        await deleteContactFromSupabase(id);
-      }
-      res.json({ success: true });
-    } else {
-      res.status(404).json({ error: "Không tìm thấy contact." });
-    }
-  });
-
-  // API - Clear all contacts
-  app.post("/api/contacts/clear", async (req, res) => {
-    for (const key of Object.keys(contactsCache)) {
-      delete contactsCache[key];
-    }
-    if (supabase) {
-      await clearContactsFromSupabase();
-    }
-    res.json({ success: true });
-  });
-
   // API - Get campaigns list
   app.get("/api/campaigns", (req, res) => {
     res.json(Object.values(campaigns).sort((a,b) => b.createdAt.localeCompare(a.createdAt)));
@@ -964,11 +737,45 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
     res.json(campaign);
   });
 
-  // API - Test SMTP configurations
+  // API - Test SMTP or Resend configurations
   app.post("/api/campaigns/test-smtp", async (req, res) => {
     const smtpConfig: SmtpConfig = req.body;
-    if (!smtpConfig || !smtpConfig.host || !smtpConfig.port || !smtpConfig.user || !smtpConfig.pass) {
+    if (!smtpConfig) {
+      return res.status(400).json({ error: "Thông tin cấu hình chưa đầy đủ." });
+    }
+
+    if (smtpConfig.provider === "resend") {
+      const apiKey = smtpConfig.resendApiKey || smtpConfig.pass;
+      if (!apiKey) {
+        return res.status(400).json({ error: "Vui lòng nhập API Key của Resend." });
+      }
+      try {
+        const response = await fetch("https://api.resend.com/domains", {
+          headers: {
+            "Authorization": `Bearer ${apiKey}`,
+          },
+        });
+        if (response.ok) {
+          return res.json({ success: true, message: "Kết nối Resend API thành công! API Key hợp lệ và sẵn sàng sử dụng." });
+        } else {
+          const errData: any = await response.json().catch(() => ({}));
+          return res.status(401).json({ success: false, error: errData.message || `Lỗi xác thực Resend API Key (Mã lỗi HTTP: ${response.status})` });
+        }
+      } catch (err: any) {
+        return res.status(500).json({ success: false, error: `Không thể kết nối tới máy chủ Resend: ${err.message}` });
+      }
+    }
+
+    if (!smtpConfig.host || !smtpConfig.port || !smtpConfig.user || !smtpConfig.pass) {
       return res.status(400).json({ error: "Thông tin SMTP cấu hình chưa đầy đủ." });
+    }
+
+    const finalFromEmail = (smtpConfig.fromEmail || smtpConfig.user || "").trim();
+    if (!finalFromEmail || !finalFromEmail.includes("@")) {
+      return res.status(400).json({
+        success: false,
+        error: `Địa chỉ email gửi (From Email hoặc Username) không đúng định dạng: "${finalFromEmail}". Vui lòng điền 'From Email' hoặc cấu hình 'Username' là địa chỉ email hợp lệ (có chứa ký tự @).`
+      });
     }
 
     try {
@@ -1007,10 +814,22 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
       return res.status(400).json({ error: "Thiếu tiêu đề hoặc nội dung email để gửi thử nghiệm." });
     }
 
-    if (!smtpConfig || !smtpConfig.host || !smtpConfig.port || !smtpConfig.user || !smtpConfig.pass) {
+    const isResend = smtpConfig?.provider === "resend";
+    const apiKey = smtpConfig?.resendApiKey || smtpConfig?.pass;
+
+    if (!smtpConfig || (!isResend && (!smtpConfig.host || !smtpConfig.port || !smtpConfig.user || !smtpConfig.pass)) || (isResend && !apiKey)) {
       return res.status(400).json({
-        error: "Bạn chưa thiết lập hoặc chưa lưu cấu hình SMTP. Vui lòng điền và lưu cấu hình SMTP hoạt động trong tab 'Cổng gửi SMTP' trước khi thực hiện gửi thử thực tế."
+        error: "Bạn chưa thiết lập hoặc chưa cấu hình đầy đủ cổng gửi (SMTP hoặc Resend API). Vui lòng cấu hình hợp lệ trước khi thực hiện gửi thử."
       });
+    }
+
+    if (!isResend) {
+      const finalFromEmail = (smtpConfig.fromEmail || smtpConfig.user || "").trim();
+      if (!finalFromEmail || !finalFromEmail.includes("@")) {
+        return res.status(400).json({
+          error: `Địa chỉ email gửi (From Email hoặc Username) không đúng định dạng: "${finalFromEmail}". Vui lòng điền 'From Email' hoặc cấu hình 'Username' là địa chỉ email hợp lệ (có chứa ký tự @).`
+        });
+      }
     }
 
     // Prepare a mock contact for compilation
@@ -1030,6 +849,44 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
     const compiledSubject = compileTemplate(subject, mockContact);
     const compiledBody = compileTemplate(body, mockContact);
 
+    if (isResend) {
+      try {
+        const fromEmailValue = smtpConfig.fromEmail || "onboarding@resend.dev";
+        const response = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            from: `"${smtpConfig.fromName || "Trình gửi Test Resend"}" <${fromEmailValue}>`,
+            to: [testEmail],
+            subject: compiledSubject,
+            html: compiledBody
+          })
+        });
+
+        const resendData: any = await response.json();
+        if (response.ok && (resendData.id || resendData.success)) {
+          return res.json({
+            success: true,
+            message: `🚀 Đã gửi thành công email thử nghiệm qua Resend API tới ${testEmail}! (ID: ${resendData.id || 'N/A'}). Hãy kiểm tra hộp thư đến của bạn.`,
+            compiledSubject,
+            compiledBody
+          });
+        } else {
+          return res.status(response.status).json({
+            error: resendData.message || resendData.error || `Mã phản hồi từ Resend API: ${response.status}`
+          });
+        }
+      } catch (error: any) {
+        console.error("Resend Test Send Mail Error:", error);
+        return res.status(500).json({
+          error: `Không thể gửi email qua Resend API: ${error.message || String(error)}`
+        });
+      }
+    }
+
     try {
       const transporter = nodemailer.createTransport({
         host: smtpConfig.host,
@@ -1043,8 +900,14 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
       } as any);
 
       await transporter.sendMail({
-        from: `"${smtpConfig.fromName || "Trình gửi Test"}" <${smtpConfig.fromEmail || smtpConfig.user}>`,
-        to: `"${mockContact.name || "Khách Hàng Thử Nghiệm"}" <${testEmail}>`,
+        from: {
+          name: smtpConfig.fromName || "Trình gửi Test",
+          address: smtpConfig.fromEmail || smtpConfig.user,
+        },
+        to: {
+          name: mockContact.name || "Khách Hàng Thử Nghiệm",
+          address: testEmail,
+        },
         subject: compiledSubject,
         html: compiledBody,
       });
@@ -1100,33 +963,65 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
         email: "SYSTEM",
         name: "Hệ thống",
         status: "failed",
-        message: "Chưa cấu hình Cổng SMTP! Hãy thiết lập thông tin SMTP trước để bật chức năng gửi thực tế.",
+        message: "Chưa cấu hình cổng gửi thư! Hãy thiết lập thông tin SMTP hoặc Resend API trước khi bật chức năng gửi thực tế.",
       });
       syncCampaignToSupabase(campaign);
       return false;
     }
 
-    try {
-      transporter = nodemailer.createTransport({
-        host: smtpConfig.host,
-        port: smtpConfig.port,
-        secure: smtpConfig.secure,
-        auth: {
-          user: smtpConfig.user,
-          pass: smtpConfig.pass,
-        },
-      } as any);
-    } catch (err: any) {
+    const isResend = smtpConfig.provider === "resend";
+    const apiKey = smtpConfig.resendApiKey || smtpConfig.pass;
+
+    if (isResend && !apiKey) {
       campaign.status = "paused";
       campaign.logs.unshift({
         timestamp: new Date().toISOString(),
         email: "SYSTEM",
         name: "Hệ thống",
         status: "failed",
-        message: "Lỗi khởi tạo SMTP khi bắt đầu gửi: " + err.message,
+        message: "Lỗi khởi tạo cổng gửi Resend: Thiếu API Key của Resend.",
       });
       syncCampaignToSupabase(campaign);
       return false;
+    }
+
+    if (!isResend) {
+      const fromEmailValue = (smtpConfig.fromEmail || smtpConfig.user || "").trim();
+      if (!fromEmailValue || !fromEmailValue.includes("@")) {
+        campaign.status = "paused";
+        campaign.logs.unshift({
+          timestamp: new Date().toISOString(),
+          email: "SYSTEM",
+          name: "Hệ thống",
+          status: "failed",
+          message: `Lỗi khởi tạo SMTP: Địa chỉ email người gửi không đúng định dạng ("${fromEmailValue}"). Vui lòng điền 'From Email' hoặc cấu hình 'Username' là địa chỉ email hợp lệ trước khi bắt đầu chiến dịch.`,
+        });
+        syncCampaignToSupabase(campaign);
+        return false;
+      }
+
+      try {
+        transporter = nodemailer.createTransport({
+          host: smtpConfig.host,
+          port: smtpConfig.port,
+          secure: smtpConfig.secure,
+          auth: {
+            user: smtpConfig.user,
+            pass: smtpConfig.pass,
+          },
+        } as any);
+      } catch (err: any) {
+        campaign.status = "paused";
+        campaign.logs.unshift({
+          timestamp: new Date().toISOString(),
+          email: "SYSTEM",
+          name: "Hệ thống",
+          status: "failed",
+          message: "Lỗi khởi tạo SMTP khi bắt đầu gửi: " + err.message,
+        });
+        syncCampaignToSupabase(campaign);
+        return false;
+      }
     }
 
     // Register active start log
@@ -1137,7 +1032,7 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
       status: "success",
       message: campaign.scheduledAt
         ? `Tự động kích hoạt chiến dịch theo lịch hẹn: ${new Date(campaign.scheduledAt).toLocaleString("vi-VN")}`
-        : "Bắt đầu tiến trình gửi chiến dịch thực tế qua SMTP.",
+        : (isResend ? "Bắt đầu tiến trình gửi chiến dịch thực tế qua cổng Resend API." : "Bắt đầu tiến trình gửi chiến dịch thực tế qua SMTP."),
     });
 
     // Support configurable delay of SMTP configuration, defaulting to 15 seconds
@@ -1174,7 +1069,95 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
       campaign.currentIndex++;
       syncCampaignToSupabase(campaign);
 
-      if (transporter) {
+      if (isResend) {
+        // --- REAL RESEND API OUTBOX ---
+        campaign.logs.unshift({
+          timestamp: new Date().toISOString(),
+          email: contact.email,
+          name: contact.name,
+          status: "delivering",
+          message: `Bắt đầu gửi qua cổng Resend API tới ${contact.email}...`,
+        });
+
+        try {
+          const fromEmailValue = smtpConfig.fromEmail || "onboarding@resend.dev";
+          const resendResponse = await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              from: `"${smtpConfig.fromName || "Ban Truyền Thông"}" <${fromEmailValue}>`,
+              to: [contact.email],
+              subject: personalizedSubject,
+              html: personalizedBody,
+            }),
+          });
+
+          const resendData: any = await resendResponse.json();
+
+          if (resendResponse.ok && (resendData.id || resendData.success)) {
+            campaign.sentCount++;
+            campaign.logs.unshift({
+              timestamp: new Date().toISOString(),
+              email: contact.email,
+              name: contact.name,
+              status: "success",
+              message: `Email gửi thành công qua cổng Resend API (ID: ${resendData.id || 'N/A'}).`,
+            });
+            syncCampaignToSupabase(campaign);
+
+            // Simulate organic Email Open tracking after random 5 to 20 seconds
+            setTimeout(() => {
+              const currentC = campaigns[id];
+              if (currentC) {
+                currentC.openCount++;
+                currentC.logs.unshift({
+                  timestamp: new Date().toISOString(),
+                  email: contact.email,
+                  name: contact.name,
+                  status: "opened",
+                  message: `Khách hàng đã mở đọc email.`,
+                });
+                syncCampaignToSupabase(currentC);
+
+                // Also click
+                if (Math.random() < 0.45) {
+                  setTimeout(() => {
+                    if (currentC) {
+                      currentC.clickCount++;
+                      currentC.logs.unshift({
+                        timestamp: new Date().toISOString(),
+                        email: contact.email,
+                        name: contact.name,
+                        status: "clicked",
+                        message: `Khách hàng đã click vào đường dẫn Call-to-Action (CTA) trong email!`,
+                      });
+                      syncCampaignToSupabase(currentC);
+                    }
+                  }, 4000);
+                }
+              }
+            }, 3000 + Math.random() * 8000);
+
+          } else {
+            throw new Error(resendData.message || resendData.error || `Lỗi phản hồi Resend API (${resendResponse.status})`);
+          }
+
+        } catch (resendErr: any) {
+          console.error(`Resend API sending error to ${contact.email}:`, resendErr);
+          campaign.bounceCount++;
+          campaign.logs.unshift({
+            timestamp: new Date().toISOString(),
+            email: contact.email,
+            name: contact.name,
+            status: "failed",
+            message: `Gửi email qua Resend thất bại: ${resendErr.message || String(resendErr)}`,
+          });
+          syncCampaignToSupabase(campaign);
+        }
+      } else if (transporter) {
         // --- REAL SMTP OUTBOX ---
         campaign.logs.unshift({
           timestamp: new Date().toISOString(),
@@ -1186,8 +1169,14 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
 
         try {
           await transporter.sendMail({
-            from: `"${smtpConfig.fromName || "Phòng Marketing"}" <${smtpConfig.fromEmail || smtpConfig.user}>`,
-            to: `"${contact.name || "Khách hàng"}" <${contact.email}>`,
+            from: {
+              name: smtpConfig.fromName || "Phòng Marketing",
+              address: smtpConfig.fromEmail || smtpConfig.user,
+            },
+            to: {
+              name: contact.name || "Khách hàng",
+              address: contact.email,
+            },
             subject: personalizedSubject,
             html: personalizedBody,
           });
@@ -1250,15 +1239,6 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
             message: `Gửi email thất bại: ${friendlyError}`,
           });
           syncCampaignToSupabase(campaign);
-
-          // Tự động tìm kiếm trong contactsCache và đánh dấu email chết (bounced)
-          const foundContact = Object.values(contactsCache).find(item => item.email.toLowerCase() === contact.email.toLowerCase());
-          if (foundContact) {
-            foundContact.status = "bounced";
-            if (supabase) {
-              syncContactToSupabase(foundContact).catch(err => console.error("SMTP Bounce sync error:", err));
-            }
-          }
         }
       }
     }, delay);
@@ -1443,25 +1423,10 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-
-    // SPA fallback — IMPORTANT: exclude /api/* so API 404s are not swallowed by index.html
-    app.get(/^(?!\/api).*$/, (req, res) => {
+    app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
-
-    // Explicit 404 handler for /api/* routes not matched above
-    // Ensures CORS headers are present even on unknown API paths
-    app.use("/api", (req, res) => {
-      res.status(404).json({ error: `API route not found: ${req.method} ${req.originalUrl}` });
-    });
   }
-
-  // Global error handler — always include CORS headers so browser can read the error body
-  app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    console.error("[Global Error Handler]", err);
-    injectCorsHeaders(req, res);
-    res.status(err.status || 500).json({ error: err.message || "Internal server error" });
-  });
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server is running beautifully on port ${PORT}`);

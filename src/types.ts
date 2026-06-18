@@ -3,12 +3,12 @@ export interface Contact {
   email: string;
   name: string;
   company?: string;
-  status?: "active" | "bounced";
   customFields?: Record<string, string>;
-  createdAt?: string;
 }
 
 export interface SmtpConfig {
+  provider?: "smtp" | "resend";
+  resendApiKey?: string;
   host: string;
   port: number;
   secure: boolean;
