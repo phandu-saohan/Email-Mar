@@ -899,15 +899,33 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
         timeout: 10000, // 10s timeout for real test send
       } as any);
 
+      const cleanFromName = (smtpConfig.fromName || "").trim().replace(/["']/g, "");
+      const cleanFromEmail = (smtpConfig.fromEmail || smtpConfig.user || "").trim();
+      let fromHeader = cleanFromEmail;
+      
+      if (cleanFromName) {
+        const containsUnicode = /[^\x00-\x7F]/.test(cleanFromName);
+        const encodedName = containsUnicode 
+          ? `=?UTF-8?B?${Buffer.from(cleanFromName).toString("base64")}?=`
+          : `"${cleanFromName}"`;
+        fromHeader = `${encodedName} <${cleanFromEmail}>`;
+      }
+
+      const cleanToName = (mockContact.name || "").trim().replace(/["']/g, "");
+      const cleanToEmail = testEmail.trim();
+      let toHeader = cleanToEmail;
+
+      if (cleanToName) {
+        const containsUnicode = /[^\x00-\x7F]/.test(cleanToName);
+        const encodedName = containsUnicode
+          ? `=?UTF-8?B?${Buffer.from(cleanToName).toString("base64")}?=`
+          : `"${cleanToName}"`;
+        toHeader = `${encodedName} <${cleanToEmail}>`;
+      }
+
       await transporter.sendMail({
-        from: {
-          name: smtpConfig.fromName || "Trình gửi Test",
-          address: smtpConfig.fromEmail || smtpConfig.user,
-        },
-        to: {
-          name: mockContact.name || "Khách Hàng Thử Nghiệm",
-          address: testEmail,
-        },
+        from: fromHeader,
+        to: toHeader,
         subject: compiledSubject,
         html: compiledBody,
       });
@@ -1168,15 +1186,33 @@ Hãy tạo một tiêu đề ấn tượng và phần nội dung email HTML hoà
         });
 
         try {
+          const cleanFromName = (smtpConfig.fromName || "").trim().replace(/["']/g, "");
+          const cleanFromEmail = (smtpConfig.fromEmail || smtpConfig.user || "").trim();
+          let fromHeader = cleanFromEmail;
+          
+          if (cleanFromName) {
+            const containsUnicode = /[^\x00-\x7F]/.test(cleanFromName);
+            const encodedName = containsUnicode 
+              ? `=?UTF-8?B?${Buffer.from(cleanFromName).toString("base64")}?=`
+              : `"${cleanFromName}"`;
+            fromHeader = `${encodedName} <${cleanFromEmail}>`;
+          }
+
+          const cleanToName = (contact.name || "").trim().replace(/["']/g, "");
+          const cleanToEmail = contact.email.trim();
+          let toHeader = cleanToEmail;
+
+          if (cleanToName) {
+            const containsUnicode = /[^\x00-\x7F]/.test(cleanToName);
+            const encodedName = containsUnicode
+              ? `=?UTF-8?B?${Buffer.from(cleanToName).toString("base64")}?=`
+              : `"${cleanToName}"`;
+            toHeader = `${encodedName} <${cleanToEmail}>`;
+          }
+
           await transporter.sendMail({
-            from: {
-              name: smtpConfig.fromName || "Phòng Marketing",
-              address: smtpConfig.fromEmail || smtpConfig.user,
-            },
-            to: {
-              name: contact.name || "Khách hàng",
-              address: contact.email,
-            },
+            from: fromHeader,
+            to: toHeader,
             subject: personalizedSubject,
             html: personalizedBody,
           });
