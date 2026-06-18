@@ -6,11 +6,8 @@ export function getApiUrl(path: string): string {
       return `${origin}${path}`;
     }
     
-    // Auto-detect Vercel deployment and default to the Cloud Run backend URL
-    if (typeof window !== "undefined" && window.location.hostname.includes("vercel.app")) {
-      const fallbackBackend = "https://ais-pre-kfmstvnejouesdbyvqhy37-329591203279.asia-southeast1.run.app";
-      return `${fallbackBackend}${path}`;
-    }
+    // Under Vercel, we resolve API routes relatively to the same Vercel deployment host
+    // (handled by vercel.json rewrites)
   } catch (e) {
     console.warn("Lỗi đọc api_backend_url từ localStorage:", e);
   }
